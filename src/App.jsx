@@ -309,6 +309,10 @@ export default function App() {
     document.documentElement.style.setProperty("--ui-scale", uiScale);
   }, [uiScale]);
 
+  useEffect(() => {
+    document.title = "Shiva Draw";
+  }, []);
+
   const toggleDropdown = (name, e) => {
     e.stopPropagation();
     setActiveDropdown(activeDropdown === name ? null : name);
