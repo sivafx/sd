@@ -1,0 +1,17 @@
+{
+  "short_name": "Shiva Draw",
+  "name": "Shiva Draw - Premium Whiteboard",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#f8fafc",
+  "theme_color": "#6366f1",
+  "display": "standalone",
+  "orientation": "any"
+}
