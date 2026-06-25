@@ -1,4 +1,4 @@
-const CACHE_NAME = 'shivadraw-cache-v2';
+const CACHE_NAME = 'shivadraw-cache-v3';
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();
