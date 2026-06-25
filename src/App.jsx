@@ -14,13 +14,13 @@ const createBaseElement = (type, x, y, width, height, custom = {}) => ({
   strokeColor: "#6366f1",
   backgroundColor: "transparent",
   fillStyle: "hachure",
-  strokeWidth: 2,
+  strokeWidth: 1,
   strokeStyle: "solid",
-  roughness: 1,
+  roughness: 0,
   opacity: 100,
   groupIds: [],
   frameId: null,
-  roundness: { type: type === "rectangle" ? 3 : 2 },
+  roundness: type === "rectangle" ? null : { type: 2 },
   seed: Math.floor(Math.random() * 100000),
   version: 1,
   versionNonce: Math.floor(Math.random() * 100000),
@@ -165,33 +165,15 @@ const cloneElements = (elements) => {
 // Preloaded drawings for templates
 const SEED_DOCS = [
   {
-    id: "getting-started",
-    title: "Getting Started 🚀",
-    updatedAt: Date.now(),
-    elements: [
-      createBaseElement("ellipse", 300, 80, 220, 80, { strokeColor: "#6366f1", strokeWidth: 3, fillStyle: "solid", backgroundColor: "#e0e7ff" }),
-      createTextElement("Welcome to Shiva Draw 🎨", 315, 110, 18, { strokeColor: "#4f46e5" }),
-      
-      createArrowElement(410, 160, [[0, 0], [0, 80]], { strokeColor: "#94a3b8" }),
-      
-      createBaseElement("rectangle", 290, 240, 240, 90, { strokeColor: "#ec4899", roundness: { type: 3 }, strokeWidth: 2 }),
-      createTextElement("A premium design canvas\npowered by Excalidraw.", 305, 265, 15, { strokeColor: "#0f172a" }),
-      
-      createArrowElement(290, 285, [[0, 0], [-130, 80]], { strokeColor: "#94a3b8" }),
-      createArrowElement(530, 285, [[0, 0], [130, 80]], { strokeColor: "#94a3b8" }),
-      
-      createBaseElement("rectangle", 70, 365, 220, 100, { strokeColor: "#10b981", roundness: { type: 3 } }),
-      createTextElement("Auto-saves your changes\nto local storage!", 90, 395, 14, { strokeColor: "#0f172a" }),
-      
-      createBaseElement("rectangle", 560, 365, 220, 100, { strokeColor: "#f59e0b", roundness: { type: 3 } }),
-      createTextElement("Click Templates in the\nsidebar to spawn diagrams!", 575, 395, 13, { strokeColor: "#0f172a" })
-    ]
-  },
-  {
     id: "blank-canvas",
-    title: "Blank Board 🎨",
-    updatedAt: Date.now() - 5000,
-    elements: []
+    title: "New Canvas 🎨",
+    updatedAt: Date.now(),
+    elements: [],
+    appState: {
+      currentItemStrokeWidth: 1,
+      currentItemRoughness: 0,
+      currentItemRoundness: "sharp"
+    }
   }
 ];
 
@@ -356,7 +338,7 @@ export default function App() {
       loadedDocs = SEED_DOCS;
       localStorage.setItem("shivadraw_docs", JSON.stringify(SEED_DOCS));
       initialActiveId = SEED_DOCS[0].id;
-      showToast("Workspace seeded with template boards", "success");
+      showToast("Welcome to Shiva Draw! 🎨", "success");
     }
 
     setDocuments(loadedDocs);
@@ -1105,6 +1087,9 @@ export default function App() {
         elements: activeDoc.elements || [],
         appState: {
           viewBackgroundColor: "transparent",
+          currentItemStrokeWidth: 1,
+          currentItemRoughness: 0,
+          currentItemRoundness: "sharp",
           ...(activeDoc.appState || {}),
         }
       });
@@ -1294,12 +1279,18 @@ export default function App() {
   // Create a new board
   const createNewBoard = (title = "Untitled Board", elements = [], appState = {}, files = {}) => {
     const clonedElements = cloneElements(elements);
+    const mergedAppState = {
+      currentItemStrokeWidth: 1,
+      currentItemRoughness: 0,
+      currentItemRoundness: "sharp",
+      ...appState
+    };
     const newDoc = {
       id: `doc-${Date.now()}`,
       title,
       updatedAt: Date.now(),
       elements: clonedElements,
-      appState,
+      appState: mergedAppState,
       files
     };
 
@@ -1330,7 +1321,12 @@ export default function App() {
             id: `doc-${Date.now()}`,
             title: "New Canvas 🎨",
             updatedAt: Date.now(),
-            elements: []
+            elements: [],
+            appState: {
+              currentItemStrokeWidth: 1,
+              currentItemRoughness: 0,
+              currentItemRoundness: "sharp"
+            }
           };
           setDocuments([fallbackDoc]);
           localStorage.setItem("shivadraw_docs", JSON.stringify([fallbackDoc]));
