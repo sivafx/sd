@@ -245,7 +245,7 @@ const WIREFRAME_ELEMENTS = [
   createTextElement("📶 🔋", 530, 55, 11, { strokeColor: "#64748b" }),
   
   createBaseElement("rectangle", 300, 75, 280, 50, { strokeColor: "#94a3b8", strokeWidth: 1 }),
-  createTextElement("Shiva Draw Mobile App", 350, 88, 15, { strokeColor: "#334155" }),
+  createTextElement("Shiva Mobile App", 350, 88, 15, { strokeColor: "#334155" }),
   
   createBaseElement("rectangle", 320, 145, 240, 150, { strokeColor: "#cbd5e1", strokeStyle: "dashed" }),
   createArrowElement(320, 145, [[0, 0], [240, 150]], { strokeColor: "#e2e8f0" }),
@@ -1108,8 +1108,7 @@ export default function App() {
         const logoWrapper = document.createElement("div");
         logoWrapper.className = "toolbar-logo-injected";
         logoWrapper.innerHTML = `
-          <span class="toolbar-logo-icon">✏️</span>
-          <span class="toolbar-logo-text">Shiva Draw</span>
+          <span class="toolbar-logo-text">S H I V A</span>
           <div class="toolbar-logo-separator"></div>
         `;
         toolbar.insertBefore(logoWrapper, toolbar.firstChild);
@@ -1616,7 +1615,7 @@ export default function App() {
         {/* Sidebar Header / Logo */}
         <div className="sidebar-header">
           <div className="logo-icon">✏️</div>
-          <span className="logo-text">Shiva Draw</span>
+          <span className="logo-text">Shiva</span>
           <button 
             className="btn-secondary" 
             style={{ width: "30px", height: "30px", minWidth: "auto", position: "absolute", top: "1.5rem", right: "1.5rem", padding: "0", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "8px" }}
@@ -1709,7 +1708,7 @@ export default function App() {
         {/* Controls / Settings */}
         <div className="settings-section">
           <h4 className="section-title">Controls</h4>
-          <button className="btn-secondary" onClick={exportBoard} title="Export board as Shiva Draw JSON file">
+          <button className="btn-secondary" onClick={exportBoard} title="Export board as Shiva JSON file">
             <span>📤</span> Export JSON
           </button>
           <button className="btn-secondary" onClick={() => exportAsImage("png")} title="Export drawing as PNG image">
@@ -1718,7 +1717,7 @@ export default function App() {
           <button className="btn-secondary" onClick={() => exportAsImage("svg")} title="Export drawing as SVG vector file">
             <span>🌐</span> Export SVG
           </button>
-          <button className="btn-secondary" onClick={() => fileInputRef.current.click()} title="Import a Shiva Draw JSON file">
+          <button className="btn-secondary" onClick={() => fileInputRef.current.click()} title="Import a Shiva JSON file">
             <span>📥</span> Import JSON
           </button>
           <button className="btn-secondary" onClick={resetBoard} title="Clear the entire canvas">
@@ -1847,14 +1846,7 @@ export default function App() {
             </Excalidraw>
           )}
 
-          {/* Transparent Watermark branding */}
-          {documents.find(d => d.id === activeDocId)?.elements?.length === 0 && (
-            <div className="welcome-overlay">
-              <span className="welcome-logo">✏️</span>
-              <h2 className="welcome-title">Shiva Draw</h2>
-              <p style={{ fontSize: "0.9rem", color: "var(--text-secondary)" }}>Start sketch drawing here</p>
-            </div>
-          )}
+
         </div>
       </main>
 
@@ -1868,7 +1860,7 @@ export default function App() {
 
       {/* Floating Vertical Brand Watermark */}
       <div className="vertical-brand-watermark">
-        Shiva Draw
+        SHIVA
       </div>
     </div>
   );

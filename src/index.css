@@ -780,7 +780,7 @@ body {
 
 .excalidraw .App-toolbar .toolbar-logo-text {
   font-family: var(--font-display);
-  font-size: 1rem;
+  font-size: 1.2rem !important;
   font-weight: 800;
   letter-spacing: -0.2px;
   background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
@@ -846,4 +846,16 @@ body {
 .excalidraw-container .excalidraw {
   background-color: transparent !important;
   background: transparent !important;
+}
+
+/* Hide bottom zoom, undo/redo, and help buttons when the left sidebar is collapsed */
+.sidebar-collapsed .excalidraw .layer-ui__wrapper [class*="bottom-left"],
+.sidebar-collapsed .excalidraw .layer-ui__wrapper [class*="bottom-right"],
+.sidebar-collapsed .excalidraw .layer-ui__wrapper .footer-center {
+  display: none !important;
+}
+
+/* Hide navigation key hint completely at all times */
+.excalidraw .HintViewer {
+  display: none !important;
 }
