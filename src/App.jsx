@@ -1815,6 +1815,8 @@ export default function App() {
             >
               <option value="0.5">50% (Tiny)</option>
               <option value="0.6">60% (Very Small)</option>
+              <option value="0.65">65% (Compact Small)</option>
+              <option value="0.7">70% (Medium Small)</option>
               <option value="0.75">75% (Small)</option>
               <option value="0.9">90% (Compact)</option>
               <option value="1.0">100% (Default)</option>
