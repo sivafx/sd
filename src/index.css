@@ -727,14 +727,22 @@ body {
   }
 }
 
+/* Compact styling to match modern Excalidraw sizing natively */
+.excalidraw {
+  --default-button-size: 32px !important;
+  --lg-button-size: 34px !important;
+  --default-icon-size: 16px !important;
+  --lg-icon-size: 18px !important;
+}
+
 /* Override Excalidraw Toolbar layout to force single-row containing logo and buttons */
 .excalidraw .App-toolbar {
   display: flex !important;
   flex-direction: row !important;
   flex-wrap: nowrap !important;
   align-items: center !important;
-  height: 48px !important;
-  padding: 0 8px !important;
+  height: 42px !important;
+  padding: 0 6px !important;
   gap: 2px !important;
 }
 
@@ -744,8 +752,8 @@ body {
   flex-direction: row;
   align-items: center;
   flex-wrap: nowrap;
-  gap: 0.45rem;
-  padding-left: 10px;
+  gap: 0.35rem;
+  padding-left: 6px;
   padding-right: 2px;
   height: 100%;
   align-self: center;
@@ -755,15 +763,15 @@ body {
 }
 
 .excalidraw .App-toolbar .toolbar-logo-icon {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
-  border-radius: 8px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: white;
-  font-size: 0.9rem;
+  font-size: 0.8rem;
   line-height: 1;
   box-shadow: 0 2px 6px rgba(99, 102, 241, 0.2);
   flex-shrink: 0;
@@ -772,7 +780,7 @@ body {
 
 .excalidraw .App-toolbar .toolbar-logo-text {
   font-family: var(--font-display);
-  font-size: 1.15rem;
+  font-size: 1rem;
   font-weight: 800;
   letter-spacing: -0.2px;
   background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
@@ -784,9 +792,9 @@ body {
 
 .excalidraw .App-toolbar .toolbar-logo-separator {
   width: 1px;
-  height: 20px;
+  height: 16px;
   background-color: var(--border-color);
-  margin-left: 6px;
+  margin-left: 4px;
   margin-right: 2px;
   flex-shrink: 0;
 }
