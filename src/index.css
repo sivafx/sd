@@ -736,42 +736,6 @@ body {
   height: 48px !important;
   padding: 0 8px !important;
   gap: 2px !important;
-  transform: scale(0.75) !important;
-  transform-origin: top center !important;
-}
-
-/* Scale Excalidraw UI panels (islands) and sidebars size to 70% */
-.excalidraw .layer-ui__wrapper .island,
-.excalidraw-sidebar,
-.excalidraw .sidebar {
-  transform: scale(0.70) !important;
-  transform-origin: left top !important;
-}
-
-/* Scale down Excalidraw color pickers and popover dialogs */
-.excalidraw .color-picker,
-.excalidraw .popover,
-.color-picker,
-.popover {
-  transform: scale(0.75) !important;
-  transform-origin: center center !important;
-}
-
-/* Proper transform-origins based on UI layout container positions to prevent elements drifting offscreen */
-.excalidraw .layer-ui__wrapper [class*="bottom-left"] .island {
-  transform-origin: left bottom !important;
-}
-
-.excalidraw .layer-ui__wrapper [class*="top-right"] .island {
-  transform-origin: right top !important;
-}
-
-.excalidraw .layer-ui__wrapper [class*="bottom-right"] .island {
-  transform-origin: right bottom !important;
-}
-
-.excalidraw .layer-ui__wrapper [class*="footer"] .island {
-  transform-origin: bottom center !important;
 }
 
 /* Styling for Shiva Draw Injected Logo inside Excalidraw Toolbar */
