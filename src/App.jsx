@@ -290,6 +290,24 @@ export default function App() {
     return localStorage.getItem("shivadraw_active_custom_font") || "Roboto";
   });
   const [saveStatus, setSaveStatus] = useState("saved"); // "saved" | "saving"
+  const [showCanvasControls, setShowCanvasControls] = useState(() => {
+    const saved = localStorage.getItem("shivadraw_show_canvas_controls");
+    return saved ? saved === "true" : true;
+  });
+
+  const handleToggleCanvasControls = (e) => {
+    const checked = e.target.checked;
+    setShowCanvasControls(checked);
+    localStorage.setItem("shivadraw_show_canvas_controls", checked);
+  };
+  const [uiScale, setUiScale] = useState(() => {
+    const saved = localStorage.getItem("shivadraw_ui_scale");
+    return saved ? parseFloat(saved) : 0.75;
+  });
+
+  useEffect(() => {
+    document.documentElement.style.setProperty("--ui-scale", uiScale);
+  }, [uiScale]);
 
   const toggleDropdown = (name, e) => {
     e.stopPropagation();
@@ -1609,7 +1627,7 @@ export default function App() {
   };
 
   return (
-    <div className={`app-container ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"}`}>
+    <div className={`app-container ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"} ${showCanvasControls ? "show-canvas-controls" : "hide-canvas-controls"}`}>
       {/* Left Sidebar Panel */}
       <aside className={`sidebar ${!sidebarOpen ? "collapsed" : ""}`}>
         {/* Sidebar Header / Logo */}
@@ -1618,7 +1636,7 @@ export default function App() {
           <span className="logo-text">Shiva</span>
           <button 
             className="btn-secondary" 
-            style={{ width: "30px", height: "30px", minWidth: "auto", position: "absolute", top: "1.5rem", right: "1.5rem", padding: "0", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "8px" }}
+            style={{ width: "calc(30px * var(--ui-scale))", height: "calc(30px * var(--ui-scale))", minWidth: "auto", position: "absolute", top: "calc(1.5rem * var(--ui-scale))", right: "calc(1.5rem * var(--ui-scale))", padding: "0", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "calc(8px * var(--ui-scale))", fontSize: "calc(12px * var(--ui-scale))" }}
             onClick={() => setSidebarOpen(false)}
             title="Collapse Sidebar (Ctrl + \)"
           >
@@ -1633,10 +1651,10 @@ export default function App() {
 
         {/* Drawings Selector */}
         <div className="documents-section">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "calc(0.5rem * var(--ui-scale))" }}>
             <h4 className="section-title" style={{ margin: 0 }}>My Drawings</h4>
-            <span style={{ fontSize: "0.7rem", color: saveStatus === "saving" ? "var(--accent-color)" : "var(--success-color)", display: "flex", alignItems: "center", gap: "0.25rem", userSelect: "none" }}>
-              <span className={`status-dot ${saveStatus}`} style={{ width: "6px", height: "6px", borderRadius: "50%", background: saveStatus === "saving" ? "var(--accent-color)" : "var(--success-color)", display: "inline-block" }}></span>
+            <span style={{ fontSize: "calc(0.7rem * var(--ui-scale))", color: saveStatus === "saving" ? "var(--accent-color)" : "var(--success-color)", display: "flex", alignItems: "center", gap: "calc(0.25rem * var(--ui-scale))", userSelect: "none" }}>
+              <span className={`status-dot ${saveStatus}`} style={{ width: "calc(6px * var(--ui-scale))", height: "calc(6px * var(--ui-scale))", borderRadius: "50%", background: saveStatus === "saving" ? "var(--accent-color)" : "var(--success-color)", display: "inline-block" }}></span>
               {saveStatus === "saving" ? "Saving..." : "Saved"}
             </span>
           </div>
@@ -1725,19 +1743,19 @@ export default function App() {
           </button>
           
           {/* Default Font Selector */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", padding: "0.25rem 0" }}>
-            <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default Font</span>
+          <div style={{ display: "flex", flexDirection: "column", gap: "calc(0.25rem * var(--ui-scale))", padding: "calc(0.25rem * var(--ui-scale)) 0" }}>
+            <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))", color: "var(--text-secondary)" }}>Default Font</span>
             <select 
               value={activeCustomFont} 
               onChange={(e) => setActiveCustomFont(e.target.value)}
               style={{
                 width: "100%",
-                padding: "0.35rem 0.5rem",
-                borderRadius: "6px",
+                padding: "calc(0.35rem * var(--ui-scale)) calc(0.5rem * var(--ui-scale))",
+                borderRadius: "calc(6px * var(--ui-scale))",
                 border: "1px solid var(--border-color)",
                 background: "var(--bg-card)",
                 color: "var(--text-primary)",
-                fontSize: "0.8rem",
+                fontSize: "calc(0.8rem * var(--ui-scale))",
                 cursor: "pointer",
                 outline: "none"
               }}
@@ -1754,8 +1772,8 @@ export default function App() {
           </div>
           
           {/* Brush Smoothing Slider */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginTop: "0.25rem", padding: "0.25rem 0" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "calc(0.25rem * var(--ui-scale))", marginTop: "calc(0.25rem * var(--ui-scale))", padding: "calc(0.25rem * var(--ui-scale)) 0" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "calc(0.75rem * var(--ui-scale))" }}>
               <span style={{ color: "var(--text-secondary)" }}>Brush Smoothing</span>
               <span style={{ fontWeight: "bold", color: "#6366f1" }}>{brushSmoothing === 0 ? "Off" : brushSmoothing}</span>
             </div>
@@ -1769,43 +1787,90 @@ export default function App() {
                 setBrushSmoothing(val);
                 localStorage.setItem("shivadraw_brush_smoothing", val);
               }}
-              style={{ width: "100%", cursor: "pointer", accentColor: "#6366f1" }}
+              style={{ width: "100%", cursor: "pointer", accentColor: "#6366f1", height: "calc(6px * var(--ui-scale))" }}
             />
           </div>
 
-          <div className="settings-row" style={{ marginTop: "0.5rem" }}>
-            <span style={{ fontSize: "0.75rem" }}>Theme Mode</span>
+          {/* Workspace Scale Dropdown */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "calc(0.25rem * var(--ui-scale))", padding: "calc(0.25rem * var(--ui-scale)) 0" }}>
+            <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))", color: "var(--text-secondary)" }}>Workspace Scale</span>
+            <select 
+              value={uiScale} 
+              onChange={(e) => {
+                const val = parseFloat(e.target.value);
+                setUiScale(val);
+                localStorage.setItem("shivadraw_ui_scale", val);
+              }}
+              style={{
+                width: "100%",
+                padding: "calc(0.35rem * var(--ui-scale)) calc(0.5rem * var(--ui-scale))",
+                borderRadius: "calc(6px * var(--ui-scale))",
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-card)",
+                color: "var(--text-primary)",
+                fontSize: "calc(0.8rem * var(--ui-scale))",
+                cursor: "pointer",
+                outline: "none"
+              }}
+            >
+              <option value="0.5">50% (Tiny)</option>
+              <option value="0.6">60% (Very Small)</option>
+              <option value="0.75">75% (Small)</option>
+              <option value="0.9">90% (Compact)</option>
+              <option value="1.0">100% (Default)</option>
+              <option value="1.1">110% (Large)</option>
+              <option value="1.2">120% (Huge)</option>
+            </select>
+          </div>
+
+          <div className="settings-row" style={{ marginTop: "calc(0.5rem * var(--ui-scale))" }}>
+            <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))" }}>Theme Mode</span>
             <button className="theme-toggle-btn" onClick={toggleTheme} title="Toggle Theme Mode">
               {theme === "light" ? "🌙" : "☀️"}
             </button>
+          </div>
+
+          <div className="settings-row" style={{ marginTop: "calc(0.5rem * var(--ui-scale))" }}>
+            <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))" }}>Show Canvas Controls</span>
+            <input 
+              type="checkbox" 
+              checked={showCanvasControls} 
+              onChange={handleToggleCanvasControls} 
+              style={{
+                cursor: "pointer",
+                accentColor: "#6366f1",
+                width: "calc(16px * var(--ui-scale))",
+                height: "calc(16px * var(--ui-scale))"
+              }}
+            />
           </div>
         </div>
 
 
         {/* Help / Shortcuts Section */}
-        <div style={{ marginTop: "auto", borderTop: "1px solid var(--border-color)", paddingTop: "1rem" }}>
+        <div style={{ marginTop: "auto", borderTop: "1px solid var(--border-color)", paddingTop: "calc(1rem * var(--ui-scale))" }}>
           <h4 className="section-title">Shortcuts Help</h4>
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem", fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "calc(0.4rem * var(--ui-scale))", fontSize: "calc(0.75rem * var(--ui-scale))", color: "var(--text-secondary)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span>Toggle Left Panel</span>
-              <kbd style={{ padding: "0.15rem 0.35rem", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "4px", fontStyle: "normal", fontWeight: "bold" }}>Ctrl + \</kbd>
+              <kbd style={{ padding: "calc(0.15rem * var(--ui-scale)) calc(0.35rem * var(--ui-scale))", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "calc(4px * var(--ui-scale))", fontStyle: "normal", fontWeight: "bold", fontSize: "calc(0.7rem * var(--ui-scale))" }}>Ctrl + \</kbd>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span>Circle Tool</span>
-              <kbd style={{ padding: "0.15rem 0.35rem", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "4px", fontStyle: "normal", fontWeight: "bold" }}>C</kbd>
+              <kbd style={{ padding: "calc(0.15rem * var(--ui-scale)) calc(0.35rem * var(--ui-scale))", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "calc(4px * var(--ui-scale))", fontStyle: "normal", fontWeight: "bold", fontSize: "calc(0.7rem * var(--ui-scale))" }}>C</kbd>
             </div>
 
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span>Line Tool</span>
-              <kbd style={{ padding: "0.15rem 0.35rem", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "4px", fontStyle: "normal", fontWeight: "bold" }}>D</kbd>
+              <kbd style={{ padding: "calc(0.15rem * var(--ui-scale)) calc(0.35rem * var(--ui-scale))", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "calc(4px * var(--ui-scale))", fontStyle: "normal", fontWeight: "bold", fontSize: "calc(0.7rem * var(--ui-scale))" }}>D</kbd>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span>Diamond Tool</span>
-              <kbd style={{ padding: "0.15rem 0.35rem", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "4px", fontStyle: "normal", fontWeight: "bold" }}>L</kbd>
+              <kbd style={{ padding: "calc(0.15rem * var(--ui-scale)) calc(0.35rem * var(--ui-scale))", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "calc(4px * var(--ui-scale))", fontStyle: "normal", fontWeight: "bold", fontSize: "calc(0.7rem * var(--ui-scale))" }}>L</kbd>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span>Delete Selected</span>
-              <kbd style={{ padding: "0.15rem 0.35rem", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "4px", fontStyle: "normal", fontWeight: "bold" }}>Z</kbd>
+              <kbd style={{ padding: "calc(0.15rem * var(--ui-scale)) calc(0.35rem * var(--ui-scale))", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "calc(4px * var(--ui-scale))", fontStyle: "normal", fontWeight: "bold", fontSize: "calc(0.7rem * var(--ui-scale))" }}>Z</kbd>
             </div>
           </div>
         </div>
