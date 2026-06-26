@@ -317,6 +317,7 @@ export default function App() {
 
   // Load documents on mount
   useEffect(() => {
+    const hasNewDocs = localStorage.getItem("shivadraw_docs") !== null;
     const savedDocs = localStorage.getItem("shivadraw_docs") || localStorage.getItem("exceldraw_docs");
     const savedTheme = localStorage.getItem("shivadraw_theme") || localStorage.getItem("exceldraw_theme") || "light";
     setTheme(savedTheme);
@@ -332,6 +333,24 @@ export default function App() {
         initialActiveId = savedActiveId;
       } else if (loadedDocs.length > 0) {
         initialActiveId = loadedDocs[0].id;
+      }
+
+      // If we loaded from the old exceldraw keys, migrate them and clean them up
+      if (!hasNewDocs && localStorage.getItem("exceldraw_docs") !== null) {
+        try {
+          localStorage.setItem("shivadraw_docs", JSON.stringify(loadedDocs));
+          localStorage.setItem("shivadraw_theme", savedTheme);
+          if (initialActiveId) {
+            localStorage.setItem("shivadraw_active_id", initialActiveId);
+          }
+          // Remove old keys to prevent duplicate storage space usage
+          localStorage.removeItem("exceldraw_docs");
+          localStorage.removeItem("exceldraw_theme");
+          localStorage.removeItem("exceldraw_active_id");
+          console.log("Successfully migrated exceldraw data to shivadraw and cleared old keys.");
+        } catch (e) {
+          console.error("Migration clean up failed", e);
+        }
       }
     } else {
       // Seed initial data
