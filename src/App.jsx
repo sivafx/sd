@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Excalidraw, MainMenu, exportToBlob, exportToSvg } from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
+import { getItem, setItem, isIndexedDBSupported } from "./db";
 
 // Helper function to create basic Excalidraw elements
 const createBaseElement = (type, x, y, width, height, custom = {}) => ({
@@ -272,6 +273,7 @@ export default function App() {
     return localStorage.getItem("shivadraw_active_custom_font") || "Roboto";
   });
   const [saveStatus, setSaveStatus] = useState("saved"); // "saved" | "saving"
+  const [searchQuery, setSearchQuery] = useState("");
   const [showCanvasControls, setShowCanvasControls] = useState(() => {
     const saved = localStorage.getItem("shivadraw_show_canvas_controls");
     return saved ? saved === "true" : true;
@@ -317,17 +319,62 @@ export default function App() {
 
   // Load documents on mount
   useEffect(() => {
-    const hasNewDocs = localStorage.getItem("shivadraw_docs") !== null;
-    const savedDocs = localStorage.getItem("shivadraw_docs") || localStorage.getItem("exceldraw_docs");
-    const savedTheme = localStorage.getItem("shivadraw_theme") || localStorage.getItem("exceldraw_theme") || "light";
-    setTheme(savedTheme);
-    document.documentElement.className = savedTheme === "dark" ? "theme-dark" : "theme-light";
+    const loadData = async () => {
+      // Load theme synchronously from localStorage as it affects the initial render theme immediately
+      const savedTheme = localStorage.getItem("shivadraw_theme") || localStorage.getItem("exceldraw_theme") || "light";
+      setTheme(savedTheme);
+      document.documentElement.className = savedTheme === "dark" ? "theme-dark" : "theme-light";
 
-    let loadedDocs = [];
-    let initialActiveId = "";
+      let loadedDocs = null;
+      let initialActiveId = "";
 
-    if (savedDocs) {
-      loadedDocs = JSON.parse(savedDocs);
+      try {
+        // Try getting from IndexedDB first
+        loadedDocs = await getItem("shivadraw_docs");
+      } catch (err) {
+        console.error("Error loading documents from IndexedDB:", err);
+      }
+
+      // Migration from localStorage if not in IndexedDB
+      if (!loadedDocs) {
+        const hasNewDocs = localStorage.getItem("shivadraw_docs") !== null;
+        const savedDocsString = localStorage.getItem("shivadraw_docs") || localStorage.getItem("exceldraw_docs");
+        
+        if (savedDocsString) {
+          try {
+            loadedDocs = JSON.parse(savedDocsString);
+            
+            // Check if IndexedDB is available/supported before writing and cleaning up
+            const isSupported = await isIndexedDBSupported();
+            if (isSupported) {
+              // Save to IndexedDB
+              await setItem("shivadraw_docs", loadedDocs);
+              
+              // Clean up localStorage to free up space (since it has a 5MB limit)
+              localStorage.removeItem("shivadraw_docs");
+              localStorage.removeItem("exceldraw_docs");
+              console.log("Successfully migrated localStorage documents to IndexedDB and cleared legacy keys.");
+            } else {
+              console.log("IndexedDB not supported or blocked. Keeping original documents in localStorage fallback.");
+            }
+          } catch (e) {
+            console.error("Migration from localStorage failed:", e);
+          }
+        }
+      }
+
+      // Seed initial data if still no documents found
+      if (!loadedDocs || loadedDocs.length === 0) {
+        loadedDocs = SEED_DOCS;
+        try {
+          await setItem("shivadraw_docs", SEED_DOCS);
+        } catch (err) {
+          console.error("Failed to seed documents in IndexedDB:", err);
+        }
+        showToast("Welcome to Shiva Draw! 🎨", "success");
+      }
+
+      // Resolve the active document ID
       const savedActiveId = localStorage.getItem("shivadraw_active_id") || localStorage.getItem("exceldraw_active_id");
       if (savedActiveId && loadedDocs.some(d => d.id === savedActiveId)) {
         initialActiveId = savedActiveId;
@@ -335,45 +382,65 @@ export default function App() {
         initialActiveId = loadedDocs[0].id;
       }
 
-      // If we loaded from the old exceldraw keys, migrate them and clean them up
-      if (!hasNewDocs && localStorage.getItem("exceldraw_docs") !== null) {
+      // Clean up legacy localStorage active_id/theme if migrating
+      if (localStorage.getItem("exceldraw_theme") !== null) {
         try {
-          localStorage.setItem("shivadraw_docs", JSON.stringify(loadedDocs));
           localStorage.setItem("shivadraw_theme", savedTheme);
           if (initialActiveId) {
             localStorage.setItem("shivadraw_active_id", initialActiveId);
           }
-          // Remove old keys to prevent duplicate storage space usage
-          localStorage.removeItem("exceldraw_docs");
           localStorage.removeItem("exceldraw_theme");
           localStorage.removeItem("exceldraw_active_id");
-          console.log("Successfully migrated exceldraw data to shivadraw and cleared old keys.");
         } catch (e) {
-          console.error("Migration clean up failed", e);
+          console.error("Clean up of old settings keys failed:", e);
         }
       }
-    } else {
-      // Seed initial data
-      loadedDocs = SEED_DOCS;
-      localStorage.setItem("shivadraw_docs", JSON.stringify(SEED_DOCS));
-      initialActiveId = SEED_DOCS[0].id;
-      showToast("Welcome to Shiva Draw! 🎨", "success");
-    }
 
-    setDocuments(loadedDocs);
-    if (initialActiveId) {
-      setActiveDocId(initialActiveId);
-      const activeDoc = loadedDocs.find(d => d.id === initialActiveId);
-      if (activeDoc) {
-        initialDataRef.current = {
-          elements: activeDoc.elements || [],
-          appState: activeDoc.appState || {},
-          files: activeDoc.files || {}
-        };
+      // Update React states and initial refs
+      setDocuments(loadedDocs);
+      if (initialActiveId) {
+        setActiveDocId(initialActiveId);
+        const activeDoc = loadedDocs.find(d => d.id === initialActiveId);
+        if (activeDoc) {
+          initialDataRef.current = {
+            elements: activeDoc.elements || [],
+            appState: activeDoc.appState || {},
+            files: activeDoc.files || {}
+          };
+        }
       }
-    }
-    setLoading(false);
+      setLoading(false);
+    };
+
+    loadData();
   }, []);
+
+  // Sync documents state changes to IndexedDB
+  useEffect(() => {
+    if (loading) return;
+
+    let isCurrent = true;
+    const saveDocs = async () => {
+      setSaveStatus("saving");
+      try {
+        await setItem("shivadraw_docs", documents);
+        if (isCurrent) {
+          setSaveStatus("saved");
+        }
+      } catch (err) {
+        console.error("Failed to auto-save documents to IndexedDB:", err);
+        showToast("Failed to save changes! Storage issue.", "error");
+        if (isCurrent) {
+          setSaveStatus("saved");
+        }
+      }
+    };
+
+    saveDocs();
+    return () => {
+      isCurrent = false;
+    };
+  }, [documents, loading]);
 
   // Load custom colors from colors.json if available
   useEffect(() => {
@@ -539,7 +606,7 @@ export default function App() {
               
               // Save it to the active document backgroundStyle state
               setDocuments(prevDocs => {
-                const updated = prevDocs.map(doc => {
+                return prevDocs.map(doc => {
                   if (doc.id === activeDocIdRef.current) {
                     return {
                       ...doc,
@@ -549,12 +616,6 @@ export default function App() {
                   }
                   return doc;
                 });
-                try {
-                  localStorage.setItem("shivadraw_docs", JSON.stringify(updated));
-                } catch (err) {
-                  console.error(err);
-                }
-                return updated;
               });
 
               // Update Excalidraw to use a transparent background so our wrapper background shows through
@@ -980,21 +1041,24 @@ export default function App() {
       const customSection = document.createElement("div");
       customSection.className = existingSection ? existingSection.className : "HelpDialog__section";
       customSection.classList.add("shivadraw-custom-shortcuts-section");
+      customSection.style.marginBottom = "1.5rem";
       
       // Create a section title
       const title = document.createElement("h3");
       title.innerText = "Shiva Draw Custom Shortcuts";
-      title.style.marginTop = "1.5rem";
+      title.style.marginTop = "0.5rem";
       title.style.marginBottom = "0.75rem";
       title.style.borderBottom = "1px solid var(--border-color, #e2e8f0)";
       title.style.paddingBottom = "0.25rem";
-      title.style.color = "var(--primary-color, #6366f1)";
+      title.style.color = "#8b5cf6"; // Distinct violet color for custom section
       customSection.appendChild(title);
 
-      // Custom shortcuts data
+      // Custom shortcuts data including bracket shortcuts
       const shortcuts = [
         { desc: "Toggle Left Panel", keys: ["Ctrl + \\", "Alt + S"] },
-        { desc: "Circle Tool", keys: ["C"] },
+        { desc: "Increase Brush/Stroke Size", keys: ["]"] },
+        { desc: "Decrease Brush/Stroke Size", keys: ["["] },
+        { desc: "Circle/Ellipse Tool", keys: ["C"] },
         { desc: "Line Tool", keys: ["D"] },
         { desc: "Diamond Tool", keys: ["L"] },
         { desc: "Delete Selected", keys: ["Z"] }
@@ -1039,13 +1103,14 @@ export default function App() {
           }
           const kbd = document.createElement("kbd");
           kbd.innerText = key;
-          // Style KBD matching Excalidraw
+          // Style KBD matching Excalidraw layout, but with custom violet borders and tinting
           kbd.style.padding = "0.15rem 0.35rem";
           kbd.style.fontSize = "0.75rem";
           kbd.style.fontWeight = "bold";
           kbd.style.borderRadius = "4px";
-          kbd.style.background = "var(--bg-card, #fff)";
-          kbd.style.border = "1px solid var(--border-color, #e2e8f0)";
+          kbd.style.background = "rgba(139, 92, 246, 0.08)";
+          kbd.style.border = "1px solid #8b5cf6";
+          kbd.style.color = "#8b5cf6";
           kbd.style.boxShadow = "var(--shadow-sm)";
           keysWrapper.appendChild(kbd);
         });
@@ -1054,8 +1119,11 @@ export default function App() {
         customSection.appendChild(row);
       });
 
-      // Append our custom section inside the active tabpanel/dialog body container
-      contentContainer.appendChild(customSection);
+      // Insert our custom section at the very beginning of the first column in the dialog content wrapper
+      const firstColumn = contentContainer.querySelector(".HelpDialog__column, [class*='HelpDialog__column']") || contentContainer;
+      if (firstColumn) {
+        firstColumn.insertBefore(customSection, firstColumn.firstChild);
+      }
     };
 
     const observer = new MutationObserver(() => {
@@ -1247,6 +1315,51 @@ export default function App() {
           document.body.dispatchEvent(deleteEvent);
         }
       }
+
+      // Bracket keys: change stroke width of selected elements and current tool
+      if (e.key === "[" || e.key === "]") {
+        if (excalidrawAPI) {
+          e.preventDefault();
+          e.stopPropagation();
+
+          const delta = e.key === "]" ? 1 : -1;
+          const currentElements = excalidrawAPI.getSceneElements();
+          const currentAppState = excalidrawAPI.getAppState();
+          const selectedIds = currentAppState.selectedElementIds || {};
+          const selectedIdsArray = Object.keys(selectedIds).filter(id => selectedIds[id]);
+
+          if (selectedIdsArray.length > 0) {
+            // Update selected elements' strokeWidth
+            const updatedElements = currentElements.map(el => {
+              if (selectedIds[el.id]) {
+                const newWidth = Math.max(1, (el.strokeWidth || 1) + delta);
+                return {
+                  ...el,
+                  strokeWidth: newWidth,
+                  version: el.version + 1,
+                  versionNonce: Math.floor(Math.random() * 100000),
+                  updated: Date.now()
+                };
+              }
+              return el;
+            });
+            excalidrawAPI.updateScene({ elements: updatedElements });
+            const sampleEl = currentElements.find(el => selectedIds[el.id]);
+            const finalWidth = Math.max(1, (sampleEl?.strokeWidth || 1) + delta);
+            showToast(`Selected elements stroke width: ${finalWidth}px`);
+          } else {
+            // Update current/next tool strokeWidth
+            const currentWidth = currentAppState.currentItemStrokeWidth || 1;
+            const newWidth = Math.max(1, currentWidth + delta);
+            excalidrawAPI.updateScene({
+              appState: {
+                currentItemStrokeWidth: newWidth
+              }
+            });
+            showToast(`Brush/Tool stroke width: ${newWidth}px`);
+          }
+        }
+      }
     };
 
     window.addEventListener("keydown", handleKeyDown, true); // Use capture phase to intercept early
@@ -1315,9 +1428,27 @@ export default function App() {
 
     const updated = [newDoc, ...documents];
     setDocuments(updated);
-    localStorage.setItem("shivadraw_docs", JSON.stringify(updated));
     setActiveDocId(newDoc.id);
     showToast(`"${title}" created`);
+  };
+
+  // Duplicate an existing board
+  const duplicateBoard = (doc, e) => {
+    e.stopPropagation();
+    const clonedElements = cloneElements(doc.elements || []);
+    const newDoc = {
+      id: `doc-${Date.now()}`,
+      title: `${doc.title} (Copy)`,
+      updatedAt: Date.now(),
+      elements: clonedElements,
+      appState: { ...doc.appState },
+      files: { ...doc.files }
+    };
+
+    const updated = [newDoc, ...documents];
+    setDocuments(updated);
+    setActiveDocId(newDoc.id);
+    showToast(`"${doc.title}" duplicated`);
   };
 
   // Delete a board
@@ -1329,7 +1460,6 @@ export default function App() {
     if (confirm(`Are you sure you want to delete "${docToDelete.title}"?`)) {
       const filtered = documents.filter(d => d.id !== id);
       setDocuments(filtered);
-      localStorage.setItem("shivadraw_docs", JSON.stringify(filtered));
 
       if (activeDocId === id) {
         if (filtered.length > 0) {
@@ -1348,7 +1478,6 @@ export default function App() {
             }
           };
           setDocuments([fallbackDoc]);
-          localStorage.setItem("shivadraw_docs", JSON.stringify([fallbackDoc]));
           setActiveDocId(fallbackDoc.id);
         }
       }
@@ -1369,7 +1498,6 @@ export default function App() {
     });
 
     setDocuments(updated);
-    localStorage.setItem("shivadraw_docs", JSON.stringify(updated));
     showToast("Board renamed");
   };
 
@@ -1379,16 +1507,15 @@ export default function App() {
       if (excalidrawAPI) {
         excalidrawAPI.updateScene({ elements: [] });
       }
-      latestDataRef.current = { elements: [] };
+      latestDataRef.current = { elements: [], files: {} };
       
       const updated = documents.map(doc => {
         if (doc.id === activeDocId) {
-          return { ...doc, elements: [], updatedAt: Date.now() };
+          return { ...doc, elements: [], files: {}, updatedAt: Date.now() };
         }
         return doc;
       });
       setDocuments(updated);
-      localStorage.setItem("shivadraw_docs", JSON.stringify(updated));
       showToast("Canvas cleared", "error");
     }
   };
@@ -1419,7 +1546,6 @@ export default function App() {
       setDocuments(prevDocs => {
         const docIndex = prevDocs.findIndex(d => d.id === currentActiveId);
         if (docIndex === -1) {
-          setSaveStatus("saved");
           return prevDocs;
         }
 
@@ -1430,24 +1556,32 @@ export default function App() {
         const newFiles = latestDataRef.current.files || {};
         const mergedFiles = { ...existingFiles, ...newFiles };
 
+        // Garbage collect orphaned files (files not referenced by active elements and not in active session memory)
+        const referencedFileIds = new Set(
+          latestDataRef.current.elements
+            .filter(el => el.type === "image" && el.fileId)
+            .map(el => el.fileId)
+        );
+        const activeFiles = (excalidrawAPI && excalidrawAPI.getFiles) ? excalidrawAPI.getFiles() : {};
+        for (const fileId in activeFiles) {
+          referencedFileIds.add(fileId);
+        }
+
+        const cleanedFiles = {};
+        for (const fileId in mergedFiles) {
+          if (referencedFileIds.has(fileId)) {
+            cleanedFiles[fileId] = mergedFiles[fileId];
+          }
+        }
+
         updatedDocs[docIndex] = {
           ...updatedDocs[docIndex],
           elements: latestDataRef.current.elements,
           appState: latestDataRef.current.appState,
-          files: mergedFiles,
+          files: cleanedFiles,
           updatedAt: Date.now()
         };
 
-        // Persist to local storage
-        try {
-          localStorage.setItem("shivadraw_docs", JSON.stringify(updatedDocs));
-        } catch (e) {
-          if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
-            console.error("Storage full: image could not be stored in localStorage.");
-            showToast("Storage quota exceeded! Cannot auto-save changes.", "error");
-          }
-        }
-        setSaveStatus("saved");
         return updatedDocs;
       });
     }, 1000); // 1-second debounce
@@ -1593,6 +1727,48 @@ export default function App() {
     }
   };
 
+  // Copy canvas drawing as PNG to clipboard
+  const copyToClipboard = async () => {
+    if (!excalidrawAPI) {
+      showToast("Canvas API not ready yet", "error");
+      return;
+    }
+    
+    const elements = excalidrawAPI.getSceneElements();
+    const activeElements = elements.filter(el => !el.isDeleted);
+    
+    if (activeElements.length === 0) {
+      showToast("Canvas is empty. Add elements to copy.", "error");
+      return;
+    }
+    
+    const appState = excalidrawAPI.getAppState();
+    
+    try {
+      showToast("Generating image...", "info");
+      
+      const blob = await exportToBlob({
+        elements: activeElements,
+        mimeType: "image/png",
+        appState: {
+          ...appState,
+          exportBackground: true,
+        },
+        files: excalidrawAPI.getFiles() || {}
+      });
+      
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          [blob.type]: blob
+        })
+      ]);
+      showToast("Copied PNG image to clipboard! 📋");
+    } catch (err) {
+      console.error("Clipboard copy error:", err);
+      showToast("Failed to copy image to clipboard", "error");
+    }
+  };
+
   // Export board to a local .json file
   const exportBoard = () => {
     const activeDoc = documents.find(d => d.id === activeDocId);
@@ -1677,43 +1853,63 @@ export default function App() {
               {saveStatus === "saving" ? "Saving..." : "Saved"}
             </span>
           </div>
+          <input
+            type="text"
+            placeholder="🔍 Search drawings..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{
+              width: "100%",
+              padding: "calc(0.35rem * var(--ui-scale)) calc(0.5rem * var(--ui-scale))",
+              borderRadius: "calc(6px * var(--ui-scale))",
+              border: "1px solid var(--border-color)",
+              background: "var(--bg-input, var(--bg-card))",
+              color: "var(--text-primary)",
+              fontSize: "calc(0.8rem * var(--ui-scale))",
+              marginBottom: "calc(0.5rem * var(--ui-scale))",
+              outline: "none"
+            }}
+          />
           <ul className="doc-list">
-            {documents.map((doc) => (
-              <li
-                key={doc.id}
-                className={`doc-item ${doc.id === activeDocId ? "active" : ""}`}
-                onClick={() => setActiveDocId(doc.id)}
-              >
-                <div className="doc-details">
-                  <div className="doc-title-wrapper">
-                    {editingDocId === doc.id ? (
-                      <input
-                        type="text"
-                        className="doc-title-input"
-                        defaultValue={doc.title}
-                        autoFocus
-                        onBlur={(e) => renameBoard(doc.id, e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") renameBoard(doc.id, e.target.value);
-                          if (e.key === "Escape") setEditingDocId(null);
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                    ) : (
-                      <span className="doc-title" onDoubleClick={() => setEditingDocId(doc.id)}>
-                        {doc.title}
-                      </span>
-                    )}
+            {documents
+              .filter(doc => doc.title.toLowerCase().includes(searchQuery.toLowerCase()))
+              .map((doc) => (
+                <li
+                  key={doc.id}
+                  className={`doc-item ${doc.id === activeDocId ? "active" : ""}`}
+                  onClick={() => setActiveDocId(doc.id)}
+                >
+                  <div className="doc-details">
+                    <div className="doc-title-wrapper">
+                      {editingDocId === doc.id ? (
+                        <input
+                          type="text"
+                          className="doc-title-input"
+                          defaultValue={doc.title}
+                          autoFocus
+                          onBlur={(e) => renameBoard(doc.id, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") renameBoard(doc.id, e.target.value);
+                            if (e.key === "Escape") setEditingDocId(null);
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <span className="doc-title" onDoubleClick={() => setEditingDocId(doc.id)}>
+                          {doc.title}
+                        </span>
+                      )}
+                    </div>
+                    <span className="doc-meta">{formatTime(doc.updatedAt)}</span>
                   </div>
-                  <span className="doc-meta">{formatTime(doc.updatedAt)}</span>
-                </div>
 
-                <div className="doc-actions" onClick={(e) => e.stopPropagation()}>
-                  <button className="doc-btn edit" onClick={() => setEditingDocId(doc.id)} title="Rename">✏️</button>
-                  <button className="doc-btn delete" onClick={(e) => deleteBoard(doc.id, e)} title="Delete">🗑️</button>
-                </div>
-              </li>
-            ))}
+                  <div className="doc-actions" onClick={(e) => e.stopPropagation()}>
+                    <button className="doc-btn edit" onClick={() => setEditingDocId(doc.id)} title="Rename">✏️</button>
+                    <button className="doc-btn duplicate" onClick={(e) => duplicateBoard(doc, e)} title="Duplicate">📑</button>
+                    <button className="doc-btn delete" onClick={(e) => deleteBoard(doc.id, e)} title="Delete">🗑️</button>
+                  </div>
+                </li>
+              ))}
           </ul>
         </div>
 
@@ -1750,6 +1946,9 @@ export default function App() {
           </button>
           <button className="btn-secondary" onClick={() => exportAsImage("png")} title="Export drawing as PNG image">
             <span>🖼️</span> Export PNG
+          </button>
+          <button className="btn-secondary" onClick={copyToClipboard} title="Copy drawing as PNG image to clipboard">
+            <span>📋</span> Copy to Clipboard
           </button>
           <button className="btn-secondary" onClick={() => exportAsImage("svg")} title="Export drawing as SVG vector file">
             <span>🌐</span> Export SVG
