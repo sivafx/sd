@@ -274,6 +274,10 @@ export default function App() {
   });
   const [saveStatus, setSaveStatus] = useState("saved"); // "saved" | "saving"
   const [searchQuery, setSearchQuery] = useState("");
+  const [showNotifications, setShowNotifications] = useState(() => {
+    const saved = localStorage.getItem("shivadraw_show_notifications");
+    return saved ? saved === "true" : true;
+  });
   const [showCanvasControls, setShowCanvasControls] = useState(() => {
     const saved = localStorage.getItem("shivadraw_show_canvas_controls");
     return saved ? saved === "true" : true;
@@ -1322,17 +1326,37 @@ export default function App() {
           e.preventDefault();
           e.stopPropagation();
 
-          const delta = e.key === "]" ? 1 : -1;
-          const currentElements = excalidrawAPI.getSceneElements();
           const currentAppState = excalidrawAPI.getAppState();
+          const deltaSign = e.key === "]" ? 1 : -1;
+          const currentElements = excalidrawAPI.getSceneElements();
           const selectedIds = currentAppState.selectedElementIds || {};
           const selectedIdsArray = Object.keys(selectedIds).filter(id => selectedIds[id]);
+
+          // Helper to adjust stroke width (pixel-by-pixel above 1, 0.1 steps below 1, minimum 0.01)
+          const adjustWidth = (currentWidth, sign) => {
+            const numWidth = Number(currentWidth) || 1;
+            let nextWidth;
+            if (sign > 0) { // Increase
+              if (numWidth < 1) {
+                nextWidth = Math.min(1, parseFloat((numWidth + 0.1).toFixed(2)));
+              } else {
+                nextWidth = Math.floor(numWidth) + 1;
+              }
+            } else { // Decrease
+              if (numWidth <= 1.01) {
+                nextWidth = Math.max(0.01, parseFloat((numWidth - 0.1).toFixed(2)));
+              } else {
+                nextWidth = Math.ceil(numWidth) - 1;
+              }
+            }
+            return nextWidth;
+          };
 
           if (selectedIdsArray.length > 0) {
             // Update selected elements' strokeWidth
             const updatedElements = currentElements.map(el => {
               if (selectedIds[el.id]) {
-                const newWidth = Math.max(1, (el.strokeWidth || 1) + delta);
+                const newWidth = adjustWidth(el.strokeWidth || 1, deltaSign);
                 return {
                   ...el,
                   strokeWidth: newWidth,
@@ -1345,12 +1369,12 @@ export default function App() {
             });
             excalidrawAPI.updateScene({ elements: updatedElements });
             const sampleEl = currentElements.find(el => selectedIds[el.id]);
-            const finalWidth = Math.max(1, (sampleEl?.strokeWidth || 1) + delta);
+            const finalWidth = adjustWidth(sampleEl?.strokeWidth || 1, deltaSign);
             showToast(`Selected elements stroke width: ${finalWidth}px`);
           } else {
             // Update current/next tool strokeWidth
             const currentWidth = currentAppState.currentItemStrokeWidth || 1;
-            const newWidth = Math.max(1, currentWidth + delta);
+            const newWidth = adjustWidth(currentWidth, deltaSign);
             excalidrawAPI.updateScene({
               appState: {
                 currentItemStrokeWidth: newWidth
@@ -1358,6 +1382,8 @@ export default function App() {
             });
             showToast(`Brush/Tool stroke width: ${newWidth}px`);
           }
+          // Update the label in the DOM immediately
+          setTimeout(updateStrokeWidthLabel, 0);
         }
       }
     };
@@ -1734,6 +1760,11 @@ export default function App() {
       return;
     }
     
+    if (!navigator.clipboard || !window.ClipboardItem) {
+      showToast("Clipboard copy is only supported in secure contexts (HTTPS/localhost)", "error");
+      return;
+    }
+    
     const elements = excalidrawAPI.getSceneElements();
     const activeElements = elements.filter(el => !el.isDeleted);
     
@@ -1768,6 +1799,76 @@ export default function App() {
       showToast("Failed to copy image to clipboard", "error");
     }
   };
+
+  // Update the stroke width label inside Excalidraw's floating panel
+  const updateStrokeWidthLabel = () => {
+    if (!excalidrawAPI) return;
+    
+    // Fast path: check if Excalidraw's floating panel/color-picker/popover is actually open in the DOM.
+    // If not open, return immediately. This prevents performance lagging during active drawing.
+    const panel = document.querySelector(".excalidraw .color-picker, .excalidraw .popover, [class*='color-picker']");
+    if (!panel) return;
+    
+    // Look for the elements that could be the stroke width label
+    const labels = Array.from(document.querySelectorAll(".excalidraw legend, .excalidraw .color-picker-label, .excalidraw label, .excalidraw div, .excalidraw span"));
+    const strokeWidthLabel = labels.find(el => {
+      const text = el.textContent || "";
+      return text.trim().toLowerCase().startsWith("stroke width");
+    });
+
+    if (strokeWidthLabel) {
+      // Retrieve current stroke width from active selection or current brush
+      let currentWidth = 1;
+      try {
+        const currentElements = excalidrawAPI.getSceneElements();
+        const appState = excalidrawAPI.getAppState();
+        const selectedIds = appState.selectedElementIds || {};
+        const selectedIdsArray = Object.keys(selectedIds).filter(id => selectedIds[id]);
+
+        if (selectedIdsArray.length > 0) {
+          const sampleEl = currentElements.find(el => selectedIds[el.id]);
+          if (sampleEl && sampleEl.strokeWidth !== undefined) {
+            currentWidth = sampleEl.strokeWidth;
+          }
+        } else {
+          currentWidth = appState.currentItemStrokeWidth || 1;
+        }
+      } catch (err) {
+        console.error("Error reading stroke width for label:", err);
+      }
+
+      // Append or update our custom value span in the label
+      let valueSpan = strokeWidthLabel.querySelector(".shivadraw-stroke-width-value");
+      if (!valueSpan) {
+        valueSpan = document.createElement("span");
+        valueSpan.className = "shivadraw-stroke-width-value";
+        valueSpan.style.marginLeft = "0.4rem";
+        valueSpan.style.fontSize = "0.75rem";
+        valueSpan.style.color = "#8b5cf6"; // Violet color matching our custom theme
+        valueSpan.style.fontWeight = "bold";
+        strokeWidthLabel.appendChild(valueSpan);
+      }
+      valueSpan.textContent = `(${parseFloat(Number(currentWidth).toFixed(2))}px)`;
+    }
+  };
+
+  // Trigger stroke width label sync on low-frequency window mouse release and click events.
+  // This completely eliminates high-frequency DOM overhead during active canvas draws.
+  useEffect(() => {
+    if (loading || !excalidrawAPI) return;
+
+    const handleWindowUpdate = () => {
+      // Short delay to let Excalidraw finalize state/DOM renders
+      setTimeout(updateStrokeWidthLabel, 50);
+    };
+
+    window.addEventListener("mouseup", handleWindowUpdate);
+    window.addEventListener("click", handleWindowUpdate);
+    return () => {
+      window.removeEventListener("mouseup", handleWindowUpdate);
+      window.removeEventListener("click", handleWindowUpdate);
+    };
+  }, [loading, excalidrawAPI]);
 
   // Export board to a local .json file
   const exportBoard = () => {
@@ -2064,6 +2165,25 @@ export default function App() {
               }}
             />
           </div>
+
+          <div className="settings-row" style={{ marginTop: "calc(0.5rem * var(--ui-scale))" }}>
+            <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))" }}>Show Toast Notifications</span>
+            <input 
+              type="checkbox" 
+              checked={showNotifications} 
+              onChange={(e) => {
+                const val = e.target.checked;
+                setShowNotifications(val);
+                localStorage.setItem("shivadraw_show_notifications", val);
+              }}
+              style={{
+                cursor: "pointer",
+                accentColor: "#6366f1",
+                width: "calc(16px * var(--ui-scale))",
+                height: "calc(16px * var(--ui-scale))"
+              }}
+            />
+          </div>
         </div>
 
 
@@ -2136,7 +2256,7 @@ export default function App() {
       </main>
 
       {/* Pop up message alert */}
-      {notification && (
+      {showNotifications && notification && (
         <div className={`notification-toast ${notification.type}`}>
           <span>🔔</span>
           <span>{notification.message}</span>
