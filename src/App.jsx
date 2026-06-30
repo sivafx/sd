@@ -354,6 +354,12 @@ export default function App() {
         console.error("Error loading documents from IndexedDB:", err);
       }
 
+      // Check if loadedDocs is a valid array
+      if (loadedDocs && !Array.isArray(loadedDocs)) {
+        console.warn("Loaded documents from IndexedDB is not an array:", loadedDocs);
+        loadedDocs = null;
+      }
+
       // Migration from localStorage if not in IndexedDB
       if (!loadedDocs) {
         const hasNewDocs = localStorage.getItem("shivadraw_docs") !== null;
@@ -362,22 +368,29 @@ export default function App() {
         if (savedDocsString) {
           try {
             loadedDocs = JSON.parse(savedDocsString);
+            if (!Array.isArray(loadedDocs)) {
+              console.warn("Parsed migrated documents from localStorage is not an array:", loadedDocs);
+              loadedDocs = null;
+            }
             
             // Check if IndexedDB is available/supported before writing and cleaning up
-            const isSupported = await isIndexedDBSupported();
-            if (isSupported) {
-              // Save to IndexedDB
-              await setItem("shivadraw_docs", loadedDocs);
-              
-              // Clean up localStorage to free up space (since it has a 5MB limit)
-              localStorage.removeItem("shivadraw_docs");
-              localStorage.removeItem("exceldraw_docs");
-              console.log("Successfully migrated localStorage documents to IndexedDB and cleared legacy keys.");
-            } else {
-              console.log("IndexedDB not supported or blocked. Keeping original documents in localStorage fallback.");
+            if (loadedDocs) {
+              const isSupported = await isIndexedDBSupported();
+              if (isSupported) {
+                // Save to IndexedDB
+                await setItem("shivadraw_docs", loadedDocs);
+                
+                // Clean up localStorage to free up space (since it has a 5MB limit)
+                localStorage.removeItem("shivadraw_docs");
+                localStorage.removeItem("exceldraw_docs");
+                console.log("Successfully migrated localStorage documents to IndexedDB and cleared legacy keys.");
+              } else {
+                console.log("IndexedDB not supported or blocked. Keeping original documents in localStorage fallback.");
+              }
             }
           } catch (e) {
             console.error("Migration from localStorage failed:", e);
+            loadedDocs = null;
           }
         }
       }
@@ -391,6 +404,13 @@ export default function App() {
           console.error("Failed to seed documents in IndexedDB:", err);
         }
         showToast("Welcome to Shiva Draw! 🎨", "success");
+      }
+
+      // Ensure loadedDocs is indeed an array here and sanitize documents
+      if (Array.isArray(loadedDocs)) {
+        loadedDocs = loadedDocs.filter(doc => doc && typeof doc === "object" && typeof doc.id === "string");
+      } else {
+        loadedDocs = SEED_DOCS;
       }
 
       // Resolve the active document ID
@@ -422,9 +442,9 @@ export default function App() {
         const activeDoc = loadedDocs.find(d => d.id === initialActiveId);
         if (activeDoc) {
           initialDataRef.current = {
-            elements: activeDoc.elements || [],
-            appState: activeDoc.appState || {},
-            files: activeDoc.files || {}
+            elements: Array.isArray(activeDoc.elements) ? activeDoc.elements : [],
+            appState: activeDoc.appState && typeof activeDoc.appState === "object" ? activeDoc.appState : {},
+            files: activeDoc.files && typeof activeDoc.files === "object" ? activeDoc.files : {}
           };
         }
       }

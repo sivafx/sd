@@ -8,22 +8,67 @@ function getDB() {
   if (dbPromise) return dbPromise;
 
   dbPromise = new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    let timeoutId = setTimeout(() => {
+      timeoutId = null;
+      dbPromise = null;
+      reject(new Error("IndexedDB connection timeout (1500ms)"));
+    }, 1500);
 
-    request.onupgradeneeded = (event) => {
-      const db = event.target.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME);
+    try {
+      const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+      request.onblocked = () => {
+        console.warn("IndexedDB open blocked by another connection.");
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          dbPromise = null;
+          reject(new Error("IndexedDB blocked"));
+        }
+      };
+
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+        if (!db.objectStoreNames.contains(STORE_NAME)) {
+          db.createObjectStore(STORE_NAME);
+        }
+      };
+
+      request.onsuccess = (event) => {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          resolve(event.target.result);
+        } else {
+          // If connection opened after timeout, close it to avoid leaking/blocking
+          try {
+            event.target.result.close();
+          } catch (e) {}
+        }
+      };
+
+      request.onerror = (event) => {
+        const error = event.target.error;
+        console.error("IndexedDB open error:", error);
+        if (error && error.name === "CorruptError") {
+          console.warn("IndexedDB database is corrupted. Attempting to delete database to recover...");
+          try {
+            indexedDB.deleteDatabase(DB_NAME);
+          } catch (e) {
+            console.error("Failed to delete corrupted IndexedDB:", e);
+          }
+        }
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          dbPromise = null;
+          reject(error || new Error("IndexedDB open error"));
+        }
+      };
+    } catch (err) {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        dbPromise = null;
+        reject(err);
       }
-    };
-
-    request.onsuccess = (event) => {
-      resolve(event.target.result);
-    };
-
-    request.onerror = (event) => {
-      reject(event.target.error);
-    };
+    }
   });
 
   return dbPromise;
