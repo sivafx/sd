@@ -588,11 +588,9 @@ body {
 .vertical-brand-watermark {
   position: fixed;
   top: 50%;
-  right: 15px;
-  transform: translateY(-50%) rotate(-90deg);
-  transform-origin: right center;
+  transform: translate(50%, -50%) rotate(-90deg);
+  transform-origin: center center;
   font-family: var(--font-display);
-  font-size: 0.9rem;
   font-weight: 800;
   letter-spacing: 4px;
   text-transform: uppercase;
@@ -887,5 +885,18 @@ body {
 
 /* Hide navigation key hint completely at all times */
 .excalidraw .HintViewer {
+  display: none !important;
+}
+
+/* Hide all Excalidraw and custom toast notifications when Show Toast Notifications is unchecked */
+body.hide-toasts .notification-toast,
+body.hide-toasts .excalidraw-container .Toast,
+body.hide-toasts .excalidraw-container .Toast__message,
+body.hide-toasts .excalidraw-container [class*="toast" i],
+body.hide-toasts .excalidraw-container [class*="Toast" i],
+.hide-toasts .excalidraw-container .Toast,
+.hide-toasts .excalidraw-container .Toast__message,
+.hide-toasts .excalidraw-container [class*="toast" i],
+.hide-toasts .excalidraw-container [class*="Toast" i] {
   display: none !important;
 }

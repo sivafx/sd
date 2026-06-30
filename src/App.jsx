@@ -292,6 +292,9 @@ export default function App() {
     const saved = localStorage.getItem("shivadraw_ui_scale");
     return saved ? parseFloat(saved) : 0.75;
   });
+  const [watermarkSize, setWatermarkSize] = useState(() => {
+    return localStorage.getItem("shivadraw_watermark_size") || "0.9";
+  });
 
   useEffect(() => {
     document.documentElement.style.setProperty("--ui-scale", uiScale);
@@ -300,6 +303,18 @@ export default function App() {
   useEffect(() => {
     document.title = "Shiva Draw";
   }, []);
+
+  // Sync showNotifications setting to document.body class list
+  useEffect(() => {
+    if (!showNotifications) {
+      document.body.classList.add("hide-toasts");
+    } else {
+      document.body.classList.remove("hide-toasts");
+    }
+    return () => {
+      document.body.classList.remove("hide-toasts");
+    };
+  }, [showNotifications]);
 
   const toggleDropdown = (name, e) => {
     e.stopPropagation();
@@ -1923,7 +1938,7 @@ export default function App() {
   };
 
   return (
-    <div className={`app-container ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"} ${showCanvasControls ? "show-canvas-controls" : "hide-canvas-controls"}`}>
+    <div className={`app-container ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"} ${showCanvasControls ? "show-canvas-controls" : "hide-canvas-controls"} ${showNotifications ? "show-toasts" : "hide-toasts"}`}>
       {/* Left Sidebar Panel */}
       <aside className={`sidebar ${!sidebarOpen ? "collapsed" : ""}`}>
         {/* Sidebar Header / Logo */}
@@ -2144,6 +2159,44 @@ export default function App() {
             </select>
           </div>
 
+          {/* Right Brand Watermark Size Dropdown */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "calc(0.25rem * var(--ui-scale))", padding: "calc(0.25rem * var(--ui-scale)) 0" }}>
+            <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))", color: "var(--text-secondary)" }}>Right Logo Size</span>
+            <select 
+              value={watermarkSize} 
+              onChange={(e) => {
+                const val = e.target.value;
+                setWatermarkSize(val);
+                localStorage.setItem("shivadraw_watermark_size", val);
+              }}
+              style={{
+                width: "100%",
+                padding: "calc(0.35rem * var(--ui-scale)) calc(0.5rem * var(--ui-scale))",
+                borderRadius: "calc(6px * var(--ui-scale))",
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-card)",
+                color: "var(--text-primary)",
+                fontSize: "calc(0.8rem * var(--ui-scale))",
+                cursor: "pointer",
+                outline: "none"
+              }}
+            >
+              <option value="0">Hidden</option>
+              <option value="0.5">Tiny</option>
+              <option value="0.6">Very Small</option>
+              <option value="0.75">Small</option>
+              <option value="0.9">Medium (Default)</option>
+              <option value="1.1">Medium Large</option>
+              <option value="1.3">Large</option>
+              <option value="1.6">Extra Large</option>
+              <option value="2.0">Huge</option>
+              <option value="2.5">Very Huge</option>
+              <option value="3.0">Super Huge</option>
+              <option value="4.0">Gigantic</option>
+              <option value="5.0">Colossal</option>
+            </select>
+          </div>
+
           <div className="settings-row" style={{ marginTop: "calc(0.5rem * var(--ui-scale))" }}>
             <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))" }}>Theme Mode</span>
             <button className="theme-toggle-btn" onClick={toggleTheme} title="Toggle Theme Mode">
@@ -2264,7 +2317,14 @@ export default function App() {
       )}
 
       {/* Floating Vertical Brand Watermark */}
-      <div className="vertical-brand-watermark">
+      <div 
+        className="vertical-brand-watermark"
+        style={{
+          fontSize: watermarkSize !== "0" ? `${watermarkSize}rem` : undefined,
+          right: watermarkSize !== "0" ? `calc(15px + ${watermarkSize}rem / 2)` : undefined,
+          display: watermarkSize === "0" ? "none" : "block"
+        }}
+      >
         SHIVA
       </div>
     </div>
