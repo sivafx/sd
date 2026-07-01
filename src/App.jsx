@@ -1853,7 +1853,149 @@ export default function App() {
     }
   };
 
-  // Copy canvas drawing as PNG to clipboard
+  // Export canvas drawing to PDF via browser native print dialog
+  const exportAsPdf = async () => {
+    if (!excalidrawAPI) {
+      showToast("Canvas API not ready yet", "error");
+      return;
+    }
+
+    const elements = excalidrawAPI.getSceneElements();
+    const activeElements = elements.filter(el => !el.isDeleted);
+
+    if (activeElements.length === 0) {
+      showToast("Canvas is empty. Add elements to export.", "error");
+      return;
+    }
+
+    const appState = excalidrawAPI.getAppState();
+
+    try {
+      showToast("Preparing PDF...");
+
+      const svg = await exportToSvg({
+        elements: activeElements,
+        appState: {
+          ...appState,
+          exportBackground: true,
+          exportWithDarkMode: false,
+        },
+        files: excalidrawAPI.getFiles() || {}
+      });
+
+      // Get the SVG dimensions for correct page sizing
+      const svgWidth = svg.getAttribute("width") || "1600";
+      const svgHeight = svg.getAttribute("height") || "900";
+      const svgString = new XMLSerializer().serializeToString(svg);
+      const docTitle = (activeDoc?.title || "drawing").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+      // Determine page orientation based on aspect ratio
+      const w = parseFloat(svgWidth);
+      const h = parseFloat(svgHeight);
+      const orientation = w >= h ? "landscape" : "portrait";
+
+      // Open a clean print window with the SVG fitted to page
+      const printWindow = window.open("", "_blank", "width=900,height=700");
+      if (!printWindow) {
+        showToast("Pop-up blocked. Please allow pop-ups for this site.", "error");
+        return;
+      }
+
+      printWindow.document.write(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>${docTitle}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; }
+    @page {
+      size: ${orientation};
+      margin: 0.5cm;
+    }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: white;
+      print-color-adjust: exact;
+      -webkit-print-color-adjust: exact;
+    }
+    .drawing-container {
+      width: 100%;
+      max-width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .drawing-container svg {
+      max-width: 100%;
+      max-height: 100vh;
+      width: auto;
+      height: auto;
+    }
+    .footer {
+      position: fixed;
+      bottom: 0.3cm;
+      right: 0.5cm;
+      font-size: 8pt;
+      color: #94a3b8;
+      font-family: sans-serif;
+    }
+    @media screen {
+      body { background: #f1f5f9; padding: 2rem; }
+      .drawing-container {
+        background: white;
+        border-radius: 12px;
+        padding: 2rem;
+        box-shadow: 0 4px 32px rgba(0,0,0,0.12);
+      }
+      .print-btn {
+        position: fixed;
+        top: 1.5rem;
+        right: 1.5rem;
+        background: linear-gradient(135deg, #6366f1, #ec4899);
+        color: white;
+        border: none;
+        padding: 0.75rem 1.5rem;
+        border-radius: 10px;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: 0 4px 12px rgba(99,102,241,0.4);
+        z-index: 999;
+        font-family: sans-serif;
+      }
+      .print-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+      @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+      .drawing-container { animation: fadeIn 0.3s ease; }
+    }
+    @media print {
+      .print-btn { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <button class="print-btn" onclick="window.print()">🖨️ Save as PDF</button>
+  <div class="drawing-container">
+    ${svgString}
+  </div>
+  <div class="footer">${docTitle} &mdash; Shiva Canvas</div>
+  <script>
+    // Auto-trigger print after SVG renders
+    window.onload = () => setTimeout(() => window.print(), 400);
+  <\/script>
+</body>
+</html>`);
+      printWindow.document.close();
+
+    } catch (err) {
+      console.error("PDF export error:", err);
+      showToast("Failed to prepare PDF", "error");
+    }
+  };
+
+
   const copyToClipboard = async () => {
     if (!excalidrawAPI) {
       showToast("Canvas API not ready yet", "error");
@@ -2441,6 +2583,9 @@ export default function App() {
           </button>
           <button className="btn-secondary" onClick={() => exportAsImage("png")} title="Export drawing as PNG image">
             <span>🖼️</span> Export PNG
+          </button>
+          <button className="btn-secondary" onClick={exportAsPdf} title="Export drawing as PDF via print dialog">
+            <span>📄</span> Export PDF
           </button>
           <button className="btn-secondary" onClick={copyToClipboard} title="Copy drawing as PNG image to clipboard">
             <span>📋</span> Copy to Clipboard
