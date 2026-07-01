@@ -250,6 +250,7 @@ export default function App() {
   const [editingDocId, setEditingDocId] = useState(null);
   const [theme, setTheme] = useState("light");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [propertiesPanelVisible, setPropertiesPanelVisible] = useState(true);
   const [notification, setNotification] = useState(null);
   const [excalidrawAPI, setExcalidrawAPI] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -301,7 +302,7 @@ export default function App() {
   }, [uiScale]);
 
   useEffect(() => {
-    document.title = "Shiva Draw";
+    document.title = "Shiva Canvas";
   }, []);
 
   // Sync showNotifications setting to document.body class list
@@ -403,7 +404,7 @@ export default function App() {
         } catch (err) {
           console.error("Failed to seed documents in IndexedDB:", err);
         }
-        showToast("Welcome to Shiva Draw! 🎨", "success");
+        showToast("Welcome to Shiva Canvas! 🎨", "success");
       }
 
       // Ensure loadedDocs is indeed an array here and sanitize documents
@@ -1073,54 +1074,69 @@ export default function App() {
       
       if (!contentContainer) return;
 
-      // Find one of the existing sections to clone its container layout/classes
-      const existingSection = contentContainer.querySelector(".HelpDialog__section, [class*='HelpDialog__section']") || contentContainer.firstChild;
+      // Find the tools column in the help dialog
+      const toolsColumn = contentContainer.querySelector(".HelpDialog__island--tools, [class*='HelpDialog__island--tools']");
       
+      // CRITICAL: If the tools column is not rendered yet, return and wait for the next mutation tick!
+      if (!toolsColumn) return;
+
+      const toolsContent = toolsColumn.querySelector(".HelpDialog__island-content, [class*='HelpDialog__island-content']");
+      if (!toolsContent) return;
+
       // Create our custom section
       const customSection = document.createElement("div");
-      customSection.className = existingSection ? existingSection.className : "HelpDialog__section";
       customSection.classList.add("shivadraw-custom-shortcuts-section");
+      customSection.style.display = "flex";
+      customSection.style.flexDirection = "column";
+      customSection.style.gap = "0.25rem";
       customSection.style.marginBottom = "1.5rem";
+      customSection.style.width = "100%";
       
       // Create a section title
-      const title = document.createElement("h3");
-      title.innerText = "Shiva Draw Custom Shortcuts";
+      const title = document.createElement("h5");
+      title.innerText = "Shiva Canvas Custom Shortcuts";
       title.style.marginTop = "0.5rem";
       title.style.marginBottom = "0.75rem";
       title.style.borderBottom = "1px solid var(--border-color, #e2e8f0)";
       title.style.paddingBottom = "0.25rem";
+      title.style.fontSize = "0.95rem";
+      title.style.fontWeight = "700";
       title.style.color = "#8b5cf6"; // Distinct violet color for custom section
       customSection.appendChild(title);
 
       // Custom shortcuts data including bracket shortcuts
       const shortcuts = [
-        { desc: "Toggle Left Panel", keys: ["Ctrl + \\", "Alt + S"] },
+        { desc: "Toggle Left Panel", keys: ["Ctrl + \\"] },
+        { desc: "Toggle Element Properties Panel", keys: ["Alt + S"] },
         { desc: "Increase Brush/Stroke Size", keys: ["]"] },
         { desc: "Decrease Brush/Stroke Size", keys: ["["] },
         { desc: "Circle/Ellipse Tool", keys: ["C"] },
         { desc: "Line Tool", keys: ["D"] },
+        { desc: "Draw (Freehand) Tool", keys: ["X"] },
         { desc: "Diamond Tool", keys: ["L"] },
         { desc: "Delete Selected", keys: ["Z"] }
       ];
 
       // Clone one of the existing rows for matching styles if possible
-      const existingRow = contentContainer.querySelector(".HelpDialog__row, [class*='HelpDialog__row']") || contentContainer.querySelector("tr, li");
+      const existingRow = toolsContent.querySelector(".HelpDialog__shortcut, [class*='HelpDialog__shortcut']") || toolsContent.querySelector("tr, li");
 
       shortcuts.forEach(shortcut => {
         const row = document.createElement("div");
         if (existingRow) {
           row.className = existingRow.className;
         } else {
-          // Fallback basic styling matching Excalidraw's layout
-          row.style.display = "flex";
-          row.style.justifyContent = "space-between";
-          row.style.alignItems = "center";
-          row.style.padding = "0.45rem 0";
-          row.style.borderBottom = "1px dotted rgba(0,0,0,0.1)";
-          row.style.fontSize = "0.85rem";
+          row.className = "HelpDialog__shortcut";
         }
+        
+        // Ensure proper flex layout for each row regardless of cloned styles
+        row.style.display = "flex";
+        row.style.justifyContent = "space-between";
+        row.style.alignItems = "center";
         row.style.paddingTop = "0.35rem";
         row.style.paddingBottom = "0.35rem";
+        row.style.borderBottom = "1px solid var(--border-color, rgba(0,0,0,0.05))";
+        row.style.fontSize = "0.85rem";
+        row.style.width = "100%";
 
         const descSpan = document.createElement("span");
         descSpan.innerText = shortcut.desc;
@@ -1142,7 +1158,6 @@ export default function App() {
           }
           const kbd = document.createElement("kbd");
           kbd.innerText = key;
-          // Style KBD matching Excalidraw layout, but with custom violet borders and tinting
           kbd.style.padding = "0.15rem 0.35rem";
           kbd.style.fontSize = "0.75rem";
           kbd.style.fontWeight = "bold";
@@ -1158,11 +1173,8 @@ export default function App() {
         customSection.appendChild(row);
       });
 
-      // Insert our custom section at the very beginning of the first column in the dialog content wrapper
-      const firstColumn = contentContainer.querySelector(".HelpDialog__column, [class*='HelpDialog__column']") || contentContainer;
-      if (firstColumn) {
-        firstColumn.insertBefore(customSection, firstColumn.firstChild);
-      }
+      // Insert our custom section at the very beginning of the tools list
+      toolsContent.insertBefore(customSection, toolsContent.firstChild);
     };
 
     const observer = new MutationObserver(() => {
@@ -1268,14 +1280,23 @@ export default function App() {
   // Global keyboard shortcut to map 'z' to 'Delete' key for selected items
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Toggle sidebar shortcut: Ctrl + \ (or Cmd + \) or Alt + S
-      if (
-        ((e.ctrlKey || e.metaKey) && e.key === "\\") ||
-        (e.altKey && e.key.toLowerCase() === "s")
-      ) {
+      // Toggle sidebar shortcut: Ctrl + \ (or Cmd + \)
+      if ((e.ctrlKey || e.metaKey) && e.key === "\\") {
         e.preventDefault();
         e.stopPropagation();
         setSidebarOpen(prev => !prev);
+        return;
+      }
+
+      // Toggle element properties panel shortcut: Alt + S
+      if (e.altKey && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        e.stopPropagation();
+        setPropertiesPanelVisible(prev => {
+          const next = !prev;
+          showToast(next ? "Properties panel shown" : "Properties panel hidden", "info");
+          return next;
+        });
         return;
       }
 
@@ -1320,6 +1341,15 @@ export default function App() {
           e.preventDefault();
           e.stopPropagation();
           excalidrawAPI.setActiveTool({ type: "line" });
+        }
+      }
+
+      // Activate freehand draw/pen tool on 'x' keypress
+      if (e.key.toLowerCase() === "x") {
+        if (excalidrawAPI) {
+          e.preventDefault();
+          e.stopPropagation();
+          excalidrawAPI.setActiveTool({ type: "freedraw" });
         }
       }
 
@@ -1583,7 +1613,6 @@ export default function App() {
 
   // Handle drawing mutations in Excalidraw
   const handleCanvasChange = (elements, appState, files) => {
-
     // If switching documents or Excalidraw is loading, skip saving to prevent overwrites
     if (isSwitchingRef.current) return;
 
@@ -1958,13 +1987,13 @@ export default function App() {
   };
 
   return (
-    <div className={`app-container ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"} ${showCanvasControls ? "show-canvas-controls" : "hide-canvas-controls"} ${showNotifications ? "show-toasts" : "hide-toasts"}`}>
+    <div className={`app-container ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"} ${showCanvasControls ? "show-canvas-controls" : "hide-canvas-controls"} ${showNotifications ? "show-toasts" : "hide-toasts"} ${propertiesPanelVisible ? "show-properties-panel" : "hide-properties-panel"}`}>
       {/* Left Sidebar Panel */}
       <aside className={`sidebar ${!sidebarOpen ? "collapsed" : ""}`}>
         {/* Sidebar Header / Logo */}
         <div className="sidebar-header">
           <div className="logo-icon">✏️</div>
-          <span className="logo-text">Shiva</span>
+          <span className="logo-text">Shiva Canvas</span>
           <button 
             className="btn-secondary" 
             style={{ width: "calc(30px * var(--ui-scale))", height: "calc(30px * var(--ui-scale))", minWidth: "auto", position: "absolute", top: "calc(1.5rem * var(--ui-scale))", right: "calc(1.5rem * var(--ui-scale))", padding: "0", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "calc(8px * var(--ui-scale))", fontSize: "calc(12px * var(--ui-scale))" }}
@@ -1980,121 +2009,9 @@ export default function App() {
           <span>➕</span> New Board
         </button>
 
-        {/* Drawings Selector */}
-        <div className="documents-section">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "calc(0.5rem * var(--ui-scale))" }}>
-            <h4 className="section-title" style={{ margin: 0 }}>My Drawings</h4>
-            <span style={{ fontSize: "calc(0.7rem * var(--ui-scale))", color: saveStatus === "saving" ? "var(--accent-color)" : "var(--success-color)", display: "flex", alignItems: "center", gap: "calc(0.25rem * var(--ui-scale))", userSelect: "none" }}>
-              <span className={`status-dot ${saveStatus}`} style={{ width: "calc(6px * var(--ui-scale))", height: "calc(6px * var(--ui-scale))", borderRadius: "50%", background: saveStatus === "saving" ? "var(--accent-color)" : "var(--success-color)", display: "inline-block" }}></span>
-              {saveStatus === "saving" ? "Saving..." : "Saved"}
-            </span>
-          </div>
-          <input
-            type="text"
-            placeholder="🔍 Search drawings..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            style={{
-              width: "100%",
-              padding: "calc(0.35rem * var(--ui-scale)) calc(0.5rem * var(--ui-scale))",
-              borderRadius: "calc(6px * var(--ui-scale))",
-              border: "1px solid var(--border-color)",
-              background: "var(--bg-input, var(--bg-card))",
-              color: "var(--text-primary)",
-              fontSize: "calc(0.8rem * var(--ui-scale))",
-              marginBottom: "calc(0.5rem * var(--ui-scale))",
-              outline: "none"
-            }}
-          />
-          <ul className="doc-list">
-            {documents
-              .filter(doc => doc.title.toLowerCase().includes(searchQuery.toLowerCase()))
-              .map((doc) => (
-                <li
-                  key={doc.id}
-                  className={`doc-item ${doc.id === activeDocId ? "active" : ""}`}
-                  onClick={() => setActiveDocId(doc.id)}
-                >
-                  <div className="doc-details">
-                    <div className="doc-title-wrapper">
-                      {editingDocId === doc.id ? (
-                        <input
-                          type="text"
-                          className="doc-title-input"
-                          defaultValue={doc.title}
-                          autoFocus
-                          onBlur={(e) => renameBoard(doc.id, e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") renameBoard(doc.id, e.target.value);
-                            if (e.key === "Escape") setEditingDocId(null);
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      ) : (
-                        <span className="doc-title" onDoubleClick={() => setEditingDocId(doc.id)}>
-                          {doc.title}
-                        </span>
-                      )}
-                    </div>
-                    <span className="doc-meta">{formatTime(doc.updatedAt)}</span>
-                  </div>
-
-                  <div className="doc-actions" onClick={(e) => e.stopPropagation()}>
-                    <button className="doc-btn edit" onClick={() => setEditingDocId(doc.id)} title="Rename">✏️</button>
-                    <button className="doc-btn duplicate" onClick={(e) => duplicateBoard(doc, e)} title="Duplicate">📑</button>
-                    <button className="doc-btn delete" onClick={(e) => deleteBoard(doc.id, e)} title="Delete">🗑️</button>
-                  </div>
-                </li>
-              ))}
-          </ul>
-        </div>
-
-        {/* Templates Selector */}
-        <div className="templates-section">
-          <h4 className="section-title">Templates</h4>
-          <div className="templates-grid">
-            <div className="template-card" onClick={() => createNewBoard("Flowchart Diagram", FLOWCHART_ELEMENTS)}>
-              <span className="template-icon">🌿</span>
-              <span className="template-name">Flowchart</span>
-            </div>
-            <div className="template-card" onClick={() => createNewBoard("Mind Map", MINDMAP_ELEMENTS)}>
-              <span className="template-icon">🧠</span>
-              <span className="template-name">Mind Map</span>
-            </div>
-            <div className="template-card" onClick={() => createNewBoard("App Wireframe", WIREFRAME_ELEMENTS)}>
-              <span className="template-icon">📱</span>
-              <span className="template-name">Wireframe</span>
-            </div>
-            <div className="template-card" onClick={() => createNewBoard("Blank Board", [])}>
-              <span className="template-icon">📄</span>
-              <span className="template-name">Blank Page</span>
-            </div>
-          </div>
-        </div>
-
-
-
-        {/* Controls / Settings */}
-        <div className="settings-section">
-          <h4 className="section-title">Controls</h4>
-          <button className="btn-secondary" onClick={exportBoard} title="Export board as Shiva JSON file">
-            <span>📤</span> Export JSON
-          </button>
-          <button className="btn-secondary" onClick={() => exportAsImage("png")} title="Export drawing as PNG image">
-            <span>🖼️</span> Export PNG
-          </button>
-          <button className="btn-secondary" onClick={copyToClipboard} title="Copy drawing as PNG image to clipboard">
-            <span>📋</span> Copy to Clipboard
-          </button>
-          <button className="btn-secondary" onClick={() => exportAsImage("svg")} title="Export drawing as SVG vector file">
-            <span>🌐</span> Export SVG
-          </button>
-          <button className="btn-secondary" onClick={() => fileInputRef.current.click()} title="Import a Shiva JSON file">
-            <span>📥</span> Import JSON
-          </button>
-          <button className="btn-secondary" onClick={resetBoard} title="Clear the entire canvas">
-            <span>🗑️</span> Reset Canvas
-          </button>
+        {/* Settings / Preferences Section */}
+        <div className="settings-section" style={{ borderBottom: "1px solid var(--border-color)", paddingBottom: "calc(1.25rem * var(--ui-scale))", marginBottom: "calc(1.25rem * var(--ui-scale))" }}>
+          <h4 className="section-title">Settings</h4>
           
           {/* Default Font Selector */}
           <div style={{ display: "flex", flexDirection: "column", gap: "calc(0.25rem * var(--ui-scale))", padding: "calc(0.25rem * var(--ui-scale)) 0" }}>
@@ -2225,6 +2142,21 @@ export default function App() {
           </div>
 
           <div className="settings-row" style={{ marginTop: "calc(0.5rem * var(--ui-scale))" }}>
+            <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))" }}>Show Properties Panel</span>
+            <input 
+              type="checkbox" 
+              checked={propertiesPanelVisible} 
+              onChange={(e) => setPropertiesPanelVisible(e.target.checked)} 
+              style={{
+                cursor: "pointer",
+                accentColor: "#6366f1",
+                width: "calc(16px * var(--ui-scale))",
+                height: "calc(16px * var(--ui-scale))"
+              }}
+            />
+          </div>
+
+          <div className="settings-row" style={{ marginTop: "calc(0.5rem * var(--ui-scale))" }}>
             <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))" }}>Show Canvas Controls</span>
             <input 
               type="checkbox" 
@@ -2259,34 +2191,124 @@ export default function App() {
           </div>
         </div>
 
+        {/* Drawings Selector */}
+        <div className="documents-section">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "calc(0.5rem * var(--ui-scale))" }}>
+            <h4 className="section-title" style={{ margin: 0 }}>My Drawings</h4>
+            <span style={{ fontSize: "calc(0.7rem * var(--ui-scale))", color: saveStatus === "saving" ? "var(--accent-color)" : "var(--success-color)", display: "flex", alignItems: "center", gap: "calc(0.25rem * var(--ui-scale))", userSelect: "none" }}>
+              <span className={`status-dot ${saveStatus}`} style={{ width: "calc(6px * var(--ui-scale))", height: "calc(6px * var(--ui-scale))", borderRadius: "50%", background: saveStatus === "saving" ? "var(--accent-color)" : "var(--success-color)", display: "inline-block" }}></span>
+              {saveStatus === "saving" ? "Saving..." : "Saved"}
+            </span>
+          </div>
+          <input
+            type="text"
+            placeholder="🔍 Search drawings..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{
+              width: "100%",
+              padding: "calc(0.35rem * var(--ui-scale)) calc(0.5rem * var(--ui-scale))",
+              borderRadius: "calc(6px * var(--ui-scale))",
+              border: "1px solid var(--border-color)",
+              background: "var(--bg-input, var(--bg-card))",
+              color: "var(--text-primary)",
+              fontSize: "calc(0.8rem * var(--ui-scale))",
+              marginBottom: "calc(0.5rem * var(--ui-scale))",
+              outline: "none"
+            }}
+          />
+          <ul className="doc-list">
+            {documents
+              .filter(doc => doc.title.toLowerCase().includes(searchQuery.toLowerCase()))
+              .map((doc) => (
+                <li
+                  key={doc.id}
+                  className={`doc-item ${doc.id === activeDocId ? "active" : ""}`}
+                  onClick={() => setActiveDocId(doc.id)}
+                >
+                  <div className="doc-details">
+                    <div className="doc-title-wrapper">
+                      {editingDocId === doc.id ? (
+                        <input
+                          type="text"
+                          className="doc-title-input"
+                          defaultValue={doc.title}
+                          autoFocus
+                          onBlur={(e) => renameBoard(doc.id, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") renameBoard(doc.id, e.target.value);
+                            if (e.key === "Escape") setEditingDocId(null);
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <span className="doc-title" onDoubleClick={() => setEditingDocId(doc.id)}>
+                          {doc.title}
+                        </span>
+                      )}
+                    </div>
+                    <span className="doc-meta">{formatTime(doc.updatedAt)}</span>
+                  </div>
 
-        {/* Help / Shortcuts Section */}
-        <div style={{ marginTop: "auto", borderTop: "1px solid var(--border-color)", paddingTop: "calc(1rem * var(--ui-scale))" }}>
-          <h4 className="section-title">Shortcuts Help</h4>
-          <div style={{ display: "flex", flexDirection: "column", gap: "calc(0.4rem * var(--ui-scale))", fontSize: "calc(0.75rem * var(--ui-scale))", color: "var(--text-secondary)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span>Toggle Left Panel</span>
-              <kbd style={{ padding: "calc(0.15rem * var(--ui-scale)) calc(0.35rem * var(--ui-scale))", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "calc(4px * var(--ui-scale))", fontStyle: "normal", fontWeight: "bold", fontSize: "calc(0.7rem * var(--ui-scale))" }}>Ctrl + \</kbd>
-            </div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span>Circle Tool</span>
-              <kbd style={{ padding: "calc(0.15rem * var(--ui-scale)) calc(0.35rem * var(--ui-scale))", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "calc(4px * var(--ui-scale))", fontStyle: "normal", fontWeight: "bold", fontSize: "calc(0.7rem * var(--ui-scale))" }}>C</kbd>
-            </div>
+                  <div className="doc-actions" onClick={(e) => e.stopPropagation()}>
+                    <button className="doc-btn edit" onClick={() => setEditingDocId(doc.id)} title="Rename">✏️</button>
+                    <button className="doc-btn duplicate" onClick={(e) => duplicateBoard(doc, e)} title="Duplicate">📑</button>
+                    <button className="doc-btn delete" onClick={(e) => deleteBoard(doc.id, e)} title="Delete">🗑️</button>
+                  </div>
+                </li>
+              ))}
+          </ul>
+        </div>
 
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span>Line Tool</span>
-              <kbd style={{ padding: "calc(0.15rem * var(--ui-scale)) calc(0.35rem * var(--ui-scale))", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "calc(4px * var(--ui-scale))", fontStyle: "normal", fontWeight: "bold", fontSize: "calc(0.7rem * var(--ui-scale))" }}>D</kbd>
+        {/* Templates Selector */}
+        <div className="templates-section">
+          <h4 className="section-title">Templates</h4>
+          <div className="templates-grid">
+            <div className="template-card" onClick={() => createNewBoard("Flowchart Diagram", FLOWCHART_ELEMENTS)}>
+              <span className="template-icon">🌿</span>
+              <span className="template-name">Flowchart</span>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span>Diamond Tool</span>
-              <kbd style={{ padding: "calc(0.15rem * var(--ui-scale)) calc(0.35rem * var(--ui-scale))", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "calc(4px * var(--ui-scale))", fontStyle: "normal", fontWeight: "bold", fontSize: "calc(0.7rem * var(--ui-scale))" }}>L</kbd>
+            <div className="template-card" onClick={() => createNewBoard("Mind Map", MINDMAP_ELEMENTS)}>
+              <span className="template-icon">🧠</span>
+              <span className="template-name">Mind Map</span>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span>Delete Selected</span>
-              <kbd style={{ padding: "calc(0.15rem * var(--ui-scale)) calc(0.35rem * var(--ui-scale))", background: "var(--bg-card)", border: "1px solid var(--border-color)", borderRadius: "calc(4px * var(--ui-scale))", fontStyle: "normal", fontWeight: "bold", fontSize: "calc(0.7rem * var(--ui-scale))" }}>Z</kbd>
+            <div className="template-card" onClick={() => createNewBoard("App Wireframe", WIREFRAME_ELEMENTS)}>
+              <span className="template-icon">📱</span>
+              <span className="template-name">Wireframe</span>
+            </div>
+            <div className="template-card" onClick={() => createNewBoard("Blank Board", [])}>
+              <span className="template-icon">📄</span>
+              <span className="template-name">Blank Page</span>
             </div>
           </div>
         </div>
+
+
+
+        {/* Controls / Settings */}
+        <div className="settings-section">
+          <h4 className="section-title">Controls</h4>
+          <button className="btn-secondary" onClick={exportBoard} title="Export board as Shiva Canvas JSON file">
+            <span>📤</span> Export JSON
+          </button>
+          <button className="btn-secondary" onClick={() => exportAsImage("png")} title="Export drawing as PNG image">
+            <span>🖼️</span> Export PNG
+          </button>
+          <button className="btn-secondary" onClick={copyToClipboard} title="Copy drawing as PNG image to clipboard">
+            <span>📋</span> Copy to Clipboard
+          </button>
+          <button className="btn-secondary" onClick={() => exportAsImage("svg")} title="Export drawing as SVG vector file">
+            <span>🌐</span> Export SVG
+          </button>
+          <button className="btn-secondary" onClick={() => fileInputRef.current.click()} title="Import a Shiva Canvas JSON file">
+            <span>📥</span> Import JSON
+          </button>
+          <button className="btn-secondary" onClick={resetBoard} title="Clear the entire canvas">
+            <span>🗑️</span> Reset Canvas
+          </button>
+        </div>
+
+
 
         <input
           type="file"

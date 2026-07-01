@@ -748,7 +748,7 @@ body {
   gap: calc(2px * var(--ui-scale)) !important;
 }
 
-/* Styling for Shiva Draw Injected Logo inside Excalidraw Toolbar */
+/* Styling for Shiva Canvas Injected Logo inside Excalidraw Toolbar */
 .excalidraw .App-toolbar .toolbar-logo-injected {
   display: flex;
   flex-direction: row;
@@ -898,5 +898,13 @@ body.hide-toasts .excalidraw-container [class*="Toast" i],
 .hide-toasts .excalidraw-container .Toast__message,
 .hide-toasts .excalidraw-container [class*="toast" i],
 .hide-toasts .excalidraw-container [class*="Toast" i] {
+  display: none !important;
+}
+
+/* Hide Excalidraw element properties sidebar (App-menu__left / properties panel) when propertiesPanelVisible is false */
+.hide-properties-panel .excalidraw .App-menu__left,
+.hide-properties-panel .excalidraw [class*="App-menu__left"],
+.hide-properties-panel .excalidraw .App-menu_left,
+.hide-properties-panel .excalidraw [class*="App-menu_left"] {
   display: none !important;
 }
