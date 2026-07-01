@@ -1578,6 +1578,15 @@ export default function App() {
     });
     setDocuments(updated);
     
+    // Force Excalidraw canvas transparency redraw
+    if (excalidrawAPI) {
+      excalidrawAPI.updateScene({
+        appState: {
+          viewBackgroundColor: "transparent"
+        }
+      });
+    }
+
     setItem("shivadraw_docs", updated).catch(err => {
       console.error("Failed to save background style to IndexedDB:", err);
     });
