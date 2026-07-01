@@ -92,7 +92,9 @@ const sanitizeAppState = (appState) => {
     currentItemEndArrowhead: appState.currentItemEndArrowhead,
     currentItemRoundnessType: appState.currentItemRoundnessType,
     currentItemRoundness: appState.currentItemRoundness,
-    viewBackgroundColor: appState.viewBackgroundColor,
+    // Always save as transparent so our CSS wrapper controls the background.
+    // This prevents the saved white viewBackgroundColor from overriding background presets on next load.
+    viewBackgroundColor: "transparent",
     zoom: appState.zoom ? { value: appState.zoom.value } : undefined,
     scrollX: appState.scrollX,
     scrollY: appState.scrollY
@@ -448,9 +450,14 @@ export default function App() {
         setActiveDocId(initialActiveId);
         const activeDoc = loadedDocs.find(d => d.id === initialActiveId);
         if (activeDoc) {
+          const savedAppState = activeDoc.appState && typeof activeDoc.appState === "object" ? activeDoc.appState : {};
+          // If the doc has a custom/preset background, force transparent so our CSS wrapper shows through
+          const hasCustomBg = activeDoc.backgroundStyle && activeDoc.backgroundStyle !== "solid-classic";
           initialDataRef.current = {
             elements: Array.isArray(activeDoc.elements) ? activeDoc.elements : [],
-            appState: activeDoc.appState && typeof activeDoc.appState === "object" ? activeDoc.appState : {},
+            appState: hasCustomBg
+              ? { ...savedAppState, viewBackgroundColor: "transparent" }
+              : savedAppState,
             files: activeDoc.files && typeof activeDoc.files === "object" ? activeDoc.files : {}
           };
         }
@@ -490,7 +497,7 @@ export default function App() {
 
   // Load custom colors from colors.json if available
   useEffect(() => {
-    fetch("/colors.json")
+    fetch(`${import.meta.env.BASE_URL}colors.json`)
       .then((r) => {
         if (!r.ok) throw new Error("File not found");
         return r.json();
@@ -1216,14 +1223,17 @@ export default function App() {
 
 
 
+      // Determine if this doc has a custom/preset background so we can force transparency
+      const hasCustomBg = activeDoc.backgroundStyle && activeDoc.backgroundStyle !== "solid-classic";
       excalidrawAPI.updateScene({
         elements: activeDoc.elements || [],
         appState: {
-          viewBackgroundColor: "transparent",
           currentItemStrokeWidth: 1,
           currentItemRoughness: 0,
           currentItemRoundness: "sharp",
           ...(activeDoc.appState || {}),
+          // Always override: if doc has a preset/custom bg, keep canvas transparent so our CSS shows through
+          viewBackgroundColor: hasCustomBg ? "transparent" : (activeDoc.appState?.viewBackgroundColor || "transparent"),
         }
       });
       // Reset ref memory to current loaded scene
