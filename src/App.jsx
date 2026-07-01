@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Excalidraw, MainMenu, exportToBlob, exportToSvg } from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
 import { getItem, setItem, isIndexedDBSupported } from "./db";
@@ -273,6 +273,11 @@ export default function App() {
   const backupInputRef = useRef(null);
   const isInitialMountRef = useRef(true);
   const initialDataRef = useRef(null);
+  // Ref to guard setSaveStatus — avoids a React re-render on every 60fps onChange call
+  const saveStatusRef = useRef("saved");
+  // Single shared MutationObserver registry — avoids 4 separate body+subtree observers
+  const sharedObserverCallbacks = useRef(new Set());
+  const sharedObserverRef = useRef(null);
   const [activeDropdown, setActiveDropdown] = useState(null);
   const [brushSmoothing, setBrushSmoothing] = useState(() => {
     return parseInt(localStorage.getItem("shivadraw_brush_smoothing") || "3", 10);
@@ -329,6 +334,21 @@ export default function App() {
     e.stopPropagation();
     setActiveDropdown(activeDropdown === name ? null : name);
   };
+
+  // ─── Single shared MutationObserver for all DOM-injection features ───────────
+  // Each feature effect registers a callback here instead of creating its own
+  // observer watching document.body with subtree:true (which fires on every repaint).
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      sharedObserverCallbacks.current.forEach(cb => cb());
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    sharedObserverRef.current = observer;
+    return () => {
+      observer.disconnect();
+      sharedObserverRef.current = null;
+    };
+  }, []);
 
   // Close dropdown on click outside
   useEffect(() => {
@@ -749,17 +769,10 @@ export default function App() {
     // Run immediately for currently open menus
     injectCustomColors();
 
-    const observer = new MutationObserver(() => {
-      injectCustomColors();
-    });
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-    });
-
+    // Register with shared observer instead of creating a new body+subtree observer
+    sharedObserverCallbacks.current.add(injectCustomColors);
     return () => {
-      observer.disconnect();
+      sharedObserverCallbacks.current.delete(injectCustomColors);
     };
   }, [loading, predefinedColors, excalidrawAPI]);
 
@@ -1048,6 +1061,9 @@ export default function App() {
 
     interceptFontMenu();
 
+    // Register with shared observer instead of creating a new body+subtree observer
+    // Font menu observer also temporarily disconnects itself to prevent recursive loops,
+    // so it manages its own sub-observer for that disconnect/reconnect pattern.
     observer = new MutationObserver(() => {
       interceptFontMenu();
     });
@@ -1184,17 +1200,10 @@ export default function App() {
       toolsContent.insertBefore(customSection, toolsContent.firstChild);
     };
 
-    const observer = new MutationObserver(() => {
-      injectCustomShortcuts();
-    });
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-    });
-
+    // Register with shared observer instead of creating a new body+subtree observer
+    sharedObserverCallbacks.current.add(injectCustomShortcuts);
     return () => {
-      observer.disconnect();
+      sharedObserverCallbacks.current.delete(injectCustomShortcuts);
     };
   }, [loading]);
 
@@ -1267,18 +1276,10 @@ export default function App() {
 
     injectLogo();
 
-    // Use MutationObserver to ensure the logo is re-injected if Excalidraw re-renders its toolbar
-    const observer = new MutationObserver(() => {
-      injectLogo();
-    });
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true,
-    });
-
+    // Register with shared observer instead of creating a new body+subtree observer
+    sharedObserverCallbacks.current.add(injectLogo);
     return () => {
-      observer.disconnect();
+      sharedObserverCallbacks.current.delete(injectLogo);
     };
   }, []);
 
@@ -1640,11 +1641,15 @@ export default function App() {
   };
 
   // Handle drawing mutations in Excalidraw
-  const handleCanvasChange = (elements, appState, files) => {
+  const handleCanvasChange = useCallback((elements, appState, files) => {
     // If switching documents or Excalidraw is loading, skip saving to prevent overwrites
     if (isSwitchingRef.current) return;
 
-    setSaveStatus("saving");
+    // Guard: only trigger a React re-render when status actually changes (avoids 60fps re-renders)
+    if (saveStatusRef.current !== "saving") {
+      saveStatusRef.current = "saving";
+      setSaveStatus("saving");
+    }
 
     // Filter out deleted elements to save memory
     const activeElements = elements.filter(el => !el.isDeleted);
@@ -1657,6 +1662,7 @@ export default function App() {
     saveTimeoutRef.current = setTimeout(() => {
       const currentActiveId = activeDocIdRef.current;
       if (!currentActiveId) {
+        saveStatusRef.current = "saved";
         setSaveStatus("saved");
         return;
       }
@@ -1700,13 +1706,15 @@ export default function App() {
           updatedAt: Date.now()
         };
 
+        saveStatusRef.current = "saved";
+        setSaveStatus("saved");
         return updatedDocs;
       });
     }, 1000); // 1-second debounce
-  };
+  }, [excalidrawAPI]);
 
   // Handle smoothing on pointer up (when drawing ends)
-  const handlePointerUp = (activeTool) => {
+  const handlePointerUp = useCallback((activeTool) => {
     if (activeTool && activeTool.type === "freedraw" && brushSmoothing > 0) {
       setTimeout(() => {
         if (!excalidrawAPI) return;
@@ -2090,7 +2098,8 @@ export default function App() {
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + d.toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
 
-  const activeDoc = documents.find(d => d.id === activeDocId);
+  // Memoized: avoids linear scan of documents array on every render
+  const activeDoc = useMemo(() => documents.find(d => d.id === activeDocId), [documents, activeDocId]);
 
   return (
     <div className={`app-container ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"} ${showCanvasControls ? "show-canvas-controls" : "hide-canvas-controls"} ${showNotifications ? "show-toasts" : "hide-toasts"} ${propertiesPanelVisible ? "show-properties-panel" : "hide-properties-panel"}`}>

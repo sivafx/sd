@@ -17,12 +17,17 @@
     content="drawing, whiteboard, diagram, flowchart, mindmap, wireframe, excalidraw, react, vite" />
   <meta name="author" content="Shiva Canvas Team" />
 
-  <!-- Google Fonts -->
+  <!-- Google Fonts (non-blocking async load) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
     href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=Nunito:wght@400;700&family=Lilita+One&display=swap"
-    rel="stylesheet">
+    rel="stylesheet"
+    media="print"
+    onload="this.media='all'">
+  <noscript>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=Nunito:wght@400;700&family=Lilita+One&display=swap" rel="stylesheet">
+  </noscript>
   <!-- Polyfill for Excalidraw process.env references & CDN Assets Path -->
   <script>
     window.process = { env: { NODE_ENV: 'development' } };
