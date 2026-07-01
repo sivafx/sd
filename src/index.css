@@ -11,6 +11,8 @@
   --text-secondary: #475569;
   --text-muted: #94a3b8;
   --border-color: rgba(226, 232, 240, 0.8);
+  --dot-color: rgba(15, 23, 42, 0.15);
+  --grid-color: rgba(15, 23, 42, 0.06);
   
   --primary-color: #6366f1; /* Indigo */
   --primary-hover: #4f46e5;
@@ -41,6 +43,8 @@
   --text-secondary: #cbd5e1;
   --text-muted: #64748b;
   --border-color: rgba(51, 65, 85, 0.5);
+  --dot-color: rgba(248, 250, 252, 0.15);
+  --grid-color: rgba(248, 250, 252, 0.06);
   
   --primary-color: #818cf8;
   --primary-hover: #6366f1;
@@ -466,6 +470,50 @@ body {
   background-color: var(--bg-primary);
   display: flex;
   flex-direction: column;
+  transition: background var(--transition-smooth);
+}
+
+/* Background Presets */
+.canvas-wrapper.bg-preset-solid-classic {
+  background-color: var(--bg-primary) !important;
+}
+
+.canvas-wrapper.bg-preset-blueprint {
+  background-color: #0b1e42 !important;
+  background-image: 
+    linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: calc(24px * var(--ui-scale)) calc(24px * var(--ui-scale));
+}
+
+.canvas-wrapper.bg-preset-dot-grid {
+  background-color: var(--bg-primary) !important;
+  background-image: radial-gradient(var(--dot-color) 1.5px, transparent 0);
+  background-size: calc(24px * var(--ui-scale)) calc(24px * var(--ui-scale));
+}
+
+.canvas-wrapper.bg-preset-graph-grid {
+  background-color: var(--bg-primary) !important;
+  background-image: 
+    linear-gradient(var(--grid-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
+  background-size: calc(24px * var(--ui-scale)) calc(24px * var(--ui-scale));
+}
+
+.canvas-wrapper.bg-preset-schoolboard {
+  background-color: #274C43 !important; /* Premium School Chalkboard Green, plain solid style */
+}
+
+.canvas-wrapper.bg-preset-sunset {
+  background: linear-gradient(135deg, #fef3c7, #fde047, #f97316) !important;
+}
+
+.canvas-wrapper.bg-preset-aurora {
+  background: linear-gradient(135deg, #a7f3d0, #34d399, #059669) !important;
+}
+
+.canvas-wrapper.bg-preset-midnight {
+  background: linear-gradient(135deg, #090514, #1e1b4b, #312e81) !important;
 }
 
 /* Sidebar Toggle Button overlay */

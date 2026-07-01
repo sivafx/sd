@@ -4,6 +4,10 @@ import "@excalidraw/excalidraw/index.css";
 import { getItem, setItem, isIndexedDBSupported } from "./db";
 
 // Helper function to create basic Excalidraw elements
+const BACKGROUND_PRESETS = ["solid-classic", "blueprint", "dot-grid", "graph-grid", "schoolboard", "sunset", "aurora", "midnight"];
+const isPresetBackground = (style) => BACKGROUND_PRESETS.includes(style);
+
+
 const createBaseElement = (type, x, y, width, height, custom = {}) => ({
   id: `${type}-${Math.random().toString(36).substr(2, 9)}`,
   type,
@@ -264,6 +268,7 @@ export default function App() {
   const saveTimeoutRef = useRef(null);
   const latestDataRef = useRef({ elements: [] });
   const fileInputRef = useRef(null);
+  const backupInputRef = useRef(null);
   const isInitialMountRef = useRef(true);
   const initialDataRef = useRef(null);
   const [activeDropdown, setActiveDropdown] = useState(null);
@@ -275,6 +280,7 @@ export default function App() {
   });
   const [saveStatus, setSaveStatus] = useState("saved"); // "saved" | "saving"
   const [searchQuery, setSearchQuery] = useState("");
+
   const [showNotifications, setShowNotifications] = useState(() => {
     const saved = localStorage.getItem("shivadraw_show_notifications");
     return saved ? saved === "true" : true;
@@ -638,12 +644,6 @@ export default function App() {
             e.stopPropagation();
 
             if (isCanvasBackground) {
-              // Apply the solid color to the canvas wrapper
-              const wrapper = document.querySelector(".canvas-wrapper");
-              if (wrapper) {
-                wrapper.style.background = displayColor;
-              }
-              
               // Save it to the active document backgroundStyle state
               setDocuments(prevDocs => {
                 return prevDocs.map(doc => {
@@ -1214,12 +1214,7 @@ export default function App() {
         }
       }
 
-      // Apply custom background style (solid color) to canvas wrapper
-      const finalBg = activeDoc.backgroundStyle || (theme === "dark" ? "#121212" : "#ffffff");
-      const wrapper = document.querySelector(".canvas-wrapper");
-      if (wrapper) {
-        wrapper.style.background = finalBg;
-      }
+
 
       excalidrawAPI.updateScene({
         elements: activeDoc.elements || [],
@@ -1480,14 +1475,7 @@ export default function App() {
     localStorage.setItem("shivadraw_theme", nextTheme);
     document.documentElement.className = nextTheme === "dark" ? "theme-dark" : "theme-light";
     
-    // Update wrapper background style if it's not custom
-    const activeDoc = documents.find(d => d.id === activeDocIdRef.current);
-    if (!activeDoc || !activeDoc.backgroundStyle) {
-      const wrapper = document.querySelector(".canvas-wrapper");
-      if (wrapper) {
-        wrapper.style.background = nextTheme === "dark" ? "#121212" : "#ffffff";
-      }
-    }
+
     
     if (excalidrawAPI) {
       excalidrawAPI.updateScene({
@@ -1574,6 +1562,27 @@ export default function App() {
       }
       showToast("Board deleted", "error");
     }
+  };
+
+
+
+  // Change workspace background style
+  const handleBackgroundChange = (newBgStyle) => {
+    if (!activeDocId) return;
+    
+    const updated = documents.map(doc => {
+      if (doc.id === activeDocId) {
+        return { ...doc, backgroundStyle: newBgStyle, updatedAt: Date.now() };
+      }
+      return doc;
+    });
+    setDocuments(updated);
+    
+    setItem("shivadraw_docs", updated).catch(err => {
+      console.error("Failed to save background style to IndexedDB:", err);
+    });
+    
+    showToast("Workspace background updated");
   };
 
   // Rename a board
@@ -1957,6 +1966,82 @@ export default function App() {
     showToast("Drawing JSON exported");
   };
 
+  // Backup all drawings to a single JSON file
+  const backupAllDrawings = () => {
+    if (documents.length === 0) {
+      showToast("No drawings to backup", "error");
+      return;
+    }
+    const backupData = {
+      version: "shiva-canvas-backup-v1",
+      timestamp: Date.now(),
+      documents: documents
+    };
+    const dataStr = JSON.stringify(backupData, null, 2);
+    const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
+    const exportFileDefaultName = `shiva_canvas_backup_${new Date().toISOString().slice(0, 10)}.json`;
+
+    const linkElement = document.createElement('a');
+    linkElement.setAttribute('href', dataUri);
+    linkElement.setAttribute('download', exportFileDefaultName);
+    linkElement.click();
+    showToast("All drawings backed up successfully! 💾");
+  };
+
+  // Restore drawings from a backup JSON file
+  const restoreBackup = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const fileReader = new FileReader();
+    fileReader.onload = async (event) => {
+      try {
+        const backup = JSON.parse(event.target.result);
+        if (backup && backup.version === "shiva-canvas-backup-v1" && Array.isArray(backup.documents)) {
+          let restoredCount = 0;
+          const existingIds = new Set(documents.map(d => d.id));
+          const mergedDocs = [...documents];
+
+          for (const doc of backup.documents) {
+            if (!doc || typeof doc !== "object" || !doc.id || !doc.title) continue;
+
+            if (!existingIds.has(doc.id)) {
+              mergedDocs.push(doc);
+              restoredCount++;
+            } else {
+              const newDoc = {
+                ...doc,
+                id: `doc-${Math.random().toString(36).substr(2, 9)}`,
+                title: `${doc.title} (Restored)`,
+                updatedAt: Date.now()
+              };
+              mergedDocs.push(newDoc);
+              restoredCount++;
+            }
+          }
+
+          if (restoredCount > 0) {
+            await setItem("shivadraw_docs", mergedDocs);
+            setDocuments(mergedDocs);
+            const firstRestored = mergedDocs[mergedDocs.length - restoredCount];
+            if (firstRestored) {
+              setActiveDocId(firstRestored.id);
+            }
+            showToast(`Restored ${restoredCount} drawings from backup! 📂`, "success");
+          } else {
+            showToast("No new drawings to restore", "info");
+          }
+        } else {
+          showToast("Invalid backup file format", "error");
+        }
+      } catch (err) {
+        showToast("Error restoring backup file", "error");
+      }
+    };
+    fileReader.readAsText(file);
+    e.target.value = "";
+  };
+
   // Import board from a .json file
   const handleImport = (e) => {
     const fileReader = new FileReader();
@@ -1985,6 +2070,8 @@ export default function App() {
     const d = new Date(timestamp);
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + d.toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
+
+  const activeDoc = documents.find(d => d.id === activeDocId);
 
   return (
     <div className={`app-container ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"} ${showCanvasControls ? "show-canvas-controls" : "hide-canvas-controls"} ${showNotifications ? "show-toasts" : "hide-toasts"} ${propertiesPanelVisible ? "show-properties-panel" : "hide-properties-panel"}`}>
@@ -2133,6 +2220,39 @@ export default function App() {
               <option value="5.0">Colossal</option>
             </select>
           </div>
+
+
+
+          {/* Workspace Background Style Dropdown */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "calc(0.25rem * var(--ui-scale))", padding: "calc(0.25rem * var(--ui-scale)) 0" }}>
+            <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))", color: "var(--text-secondary)" }}>Workspace Background</span>
+            <select 
+              value={isPresetBackground(activeDoc?.backgroundStyle) ? activeDoc.backgroundStyle : "solid-classic"} 
+              onChange={(e) => handleBackgroundChange(e.target.value)}
+              style={{
+                width: "100%",
+                padding: "calc(0.35rem * var(--ui-scale)) calc(0.5rem * var(--ui-scale))",
+                borderRadius: "calc(6px * var(--ui-scale))",
+                border: "1px solid var(--border-color)",
+                background: "var(--bg-card)",
+                color: "var(--text-primary)",
+                fontSize: "calc(0.8rem * var(--ui-scale))",
+                cursor: "pointer",
+                outline: "none"
+              }}
+            >
+              <option value="solid-classic">Solid Classic</option>
+              <option value="blueprint">Blueprint Grid</option>
+              <option value="dot-grid">Dot Grid</option>
+              <option value="graph-grid">Graph Grid</option>
+              <option value="schoolboard">School Board</option>
+              <option value="sunset">Sunset Glow (Gradient)</option>
+              <option value="aurora">Aurora Green (Gradient)</option>
+              <option value="midnight">Midnight Indigo (Gradient)</option>
+            </select>
+          </div>
+
+
 
           <div className="settings-row" style={{ marginTop: "calc(0.5rem * var(--ui-scale))" }}>
             <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))" }}>Theme Mode</span>
@@ -2306,6 +2426,17 @@ export default function App() {
           <button className="btn-secondary" onClick={resetBoard} title="Clear the entire canvas">
             <span>🗑️</span> Reset Canvas
           </button>
+
+          {/* Backup / Restore Controls */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "calc(0.25rem * var(--ui-scale))", borderTop: "1px solid var(--border-color)", marginTop: "calc(0.5rem * var(--ui-scale))", paddingTop: "calc(0.5rem * var(--ui-scale))" }}>
+            <span style={{ fontSize: "calc(0.7rem * var(--ui-scale))", color: "var(--text-muted)", fontWeight: "bold", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "calc(0.2rem * var(--ui-scale))" }}>System Backup</span>
+            <button className="btn-secondary" onClick={backupAllDrawings} title="Backup all Shiva Canvas drawings to a single file" style={{ display: "flex", justifyContent: "flex-start", gap: "calc(0.4rem * var(--ui-scale))", width: "100%" }}>
+              <span>💾</span> Backup All Drawings
+            </button>
+            <button className="btn-secondary" onClick={() => backupInputRef.current.click()} title="Restore all Shiva Canvas drawings from a backup file" style={{ display: "flex", justifyContent: "flex-start", gap: "calc(0.4rem * var(--ui-scale))", width: "100%" }}>
+              <span>📂</span> Restore from Backup
+            </button>
+          </div>
         </div>
 
 
@@ -2317,10 +2448,22 @@ export default function App() {
           accept=".json"
           onChange={handleImport}
         />
+        <input
+          type="file"
+          ref={backupInputRef}
+          style={{ display: "none" }}
+          accept=".json"
+          onChange={restoreBackup}
+        />
       </aside>
 
       {/* Main Canvas Component Area */}
-      <main className="canvas-wrapper">
+      <main 
+        className={`canvas-wrapper ${isPresetBackground(activeDoc?.backgroundStyle) ? `bg-preset-${activeDoc.backgroundStyle}` : "bg-preset-solid-classic"}`}
+        style={{
+          background: activeDoc?.backgroundStyle && !isPresetBackground(activeDoc.backgroundStyle) ? activeDoc.backgroundStyle : undefined
+        }}
+      >
 
 
         <div style={{ width: "100%", height: "100%", position: "relative" }}>
