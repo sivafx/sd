@@ -7,6 +7,32 @@ import { getItem, setItem, isIndexedDBSupported } from "./db";
 const BACKGROUND_PRESETS = ["solid-classic", "blueprint", "dot-grid", "graph-grid", "schoolboard", "sunset", "aurora", "midnight"];
 const isPresetBackground = (style) => BACKGROUND_PRESETS.includes(style);
 
+// Presets that are dark — watermark should be light on these
+const DARK_BACKGROUND_PRESETS = new Set(["blueprint", "schoolboard", "midnight"]);
+
+// For custom hex/rgba colors: return true if the color is perceived as dark
+const isColorDark = (color) => {
+  if (!color || color === "transparent") return false;
+  try {
+    // Handle hex colors
+    const hex = color.replace("#", "");
+    if (/^[0-9a-fA-F]{3,6}$/.test(hex)) {
+      const full = hex.length === 3 ? hex.split("").map(c => c + c).join("") : hex;
+      const r = parseInt(full.slice(0, 2), 16);
+      const g = parseInt(full.slice(2, 4), 16);
+      const b = parseInt(full.slice(4, 6), 16);
+      // Perceived luminance formula
+      return (0.299 * r + 0.587 * g + 0.114 * b) < 128;
+    }
+    // Handle rgb/rgba
+    const m = color.match(/rgba?\s*\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/);
+    if (m) {
+      return (0.299 * +m[1] + 0.587 * +m[2] + 0.114 * +m[3]) < 128;
+    }
+  } catch (e) { /* ignore */ }
+  return false;
+};
+
 
 const createBaseElement = (type, x, y, width, height, custom = {}) => ({
   id: `${type}-${Math.random().toString(36).substr(2, 9)}`,
@@ -2675,16 +2701,32 @@ export default function App() {
       )}
 
       {/* Floating Vertical Brand Watermark */}
-      <div 
-        className="vertical-brand-watermark"
-        style={{
-          fontSize: watermarkSize !== "0" ? `${watermarkSize}rem` : undefined,
-          right: watermarkSize !== "0" ? `calc(15px + ${watermarkSize}rem / 2)` : undefined,
-          display: watermarkSize === "0" ? "none" : "block"
-        }}
-      >
-        SHIVA
-      </div>
+      {(() => {
+        // Pick watermark color based on active background
+        const bgStyle = activeDoc?.backgroundStyle;
+        let watermarkColor;
+        if (bgStyle && isPresetBackground(bgStyle)) {
+          watermarkColor = DARK_BACKGROUND_PRESETS.has(bgStyle) ? "#ffffff" : "var(--text-primary)";
+        } else if (bgStyle && !isPresetBackground(bgStyle)) {
+          // Custom color — detect luminance
+          watermarkColor = isColorDark(bgStyle) ? "#ffffff" : "var(--text-primary)";
+        } else {
+          watermarkColor = "var(--text-primary)";
+        }
+        return (
+          <div
+            className="vertical-brand-watermark"
+            style={{
+              fontSize: watermarkSize !== "0" ? `${watermarkSize}rem` : undefined,
+              right: watermarkSize !== "0" ? `calc(15px + ${watermarkSize}rem / 2)` : undefined,
+              display: watermarkSize === "0" ? "none" : "block",
+              color: watermarkColor
+            }}
+          >
+            SHIVA
+          </div>
+        );
+      })()}
     </div>
   );
 }

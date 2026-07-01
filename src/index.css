@@ -648,11 +648,11 @@ body {
   pointer-events: none; /* Extremely important: allows drawing/scrolling through the text */
   white-space: nowrap;
   user-select: none;
-  transition: var(--transition-smooth);
+  transition: color 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s ease;
 }
 
 .theme-dark .vertical-brand-watermark {
-  opacity: 0.06;
+  opacity: 0.08;
 }
 
 /* Dropdowns and Top Menu styling */
