@@ -1290,9 +1290,17 @@ export default function App() {
         files: activeDoc.files || {}
       };
       
-      // Update filename state for the newly activated document from our file handles map
+      // Update filename and auto-save enabled state for the newly activated document from our file handles map
       const handle = fileHandlesRef.current[activeDocId];
-      setAutoSaveFileName(handle ? handle.name : "");
+      if (handle) {
+        setAutoSaveFileName(handle.name);
+        setAutoSaveEnabled(true);
+        autoSaveEnabledRef.current = true;
+      } else {
+        setAutoSaveFileName("");
+        setAutoSaveEnabled(false);
+        autoSaveEnabledRef.current = false;
+      }
 
       // Delay disabling the switching flag to absorb the subsequent onChange triggers
       setTimeout(() => {
