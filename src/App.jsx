@@ -1539,6 +1539,16 @@ export default function App() {
     }
   }, [notification]);
 
+  // Update document title bar (PWA title) to reflect linked file name
+  useEffect(() => {
+    if (autoSaveFileName) {
+      const cleanName = autoSaveFileName.replace(/\.shiva$/, "");
+      document.title = `${cleanName} - Shiva Canvas`;
+    } else {
+      document.title = "Shiva Canvas";
+    }
+  }, [autoSaveFileName]);
+
   // Toggle application themes
   const toggleTheme = () => {
     const nextTheme = theme === "light" ? "dark" : "light";
