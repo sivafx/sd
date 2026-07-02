@@ -295,7 +295,7 @@ export default function App() {
   });
 
   const activeDocIdRef = useRef("");
-  const isSwitchingRef = useRef(false);
+  const isSwitchingRef = useRef(true);
   const saveTimeoutRef = useRef(null);
   const latestDataRef = useRef({ elements: [] });
   const fileInputRef = useRef(null);
@@ -321,8 +321,8 @@ export default function App() {
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(false);
   const [autoSaveFileName, setAutoSaveFileName] = useState(""); // display name of the file handle
   const [autoSaveDiskStatus, setAutoSaveDiskStatus] = useState("idle"); // "idle" | "saving" | "saved" | "error"
-  // Persisted file handle for auto-save-to-disk — survives doc switches but not page reloads
-  const fileHandleRef = useRef(null);
+  // Map of docId -> FileSystemFileHandle to support per-board file handles
+  const fileHandlesRef = useRef({});
   const autoSaveTimeoutRef = useRef(null);
 
   const [showNotifications, setShowNotifications] = useState(() => {
@@ -1289,6 +1289,10 @@ export default function App() {
         files: activeDoc.files || {}
       };
       
+      // Update filename state for the newly activated document from our file handles map
+      const handle = fileHandlesRef.current[activeDocId];
+      setAutoSaveFileName(handle ? handle.name : "");
+
       // Delay disabling the switching flag to absorb the subsequent onChange triggers
       setTimeout(() => {
         isSwitchingRef.current = false;
@@ -1328,6 +1332,24 @@ export default function App() {
         e.preventDefault();
         e.stopPropagation();
         setSidebarOpen(prev => !prev);
+        return;
+      }
+
+      // Intercept Ctrl+S (Save) or Cmd+S to write directly to the linked disk file or prompt once
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s" && !e.altKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        saveNowToDisk();
+        return;
+      }
+
+      // Intercept Ctrl+O (Open) or Cmd+O to open Shiva Canvas .shiva/.json file dialog
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "o") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (fileInputRef.current) {
+          fileInputRef.current.click();
+        }
         return;
       }
 
@@ -1500,7 +1522,7 @@ export default function App() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown, true);
     };
-  }, [excalidrawAPI]);
+  }, [excalidrawAPI, documents, activeDocId]);
 
   const showToast = (message, type = "success") => {
     setNotification({ message, type });
@@ -1746,8 +1768,9 @@ export default function App() {
         saveStatusRef.current = "saved";
         setSaveStatus("saved");
 
-        // Auto-save to disk if enabled and a file handle is set
-        if (autoSaveEnabledRef.current && fileHandleRef.current) {
+        // Auto-save to disk if enabled and a file handle is set for the active doc
+        const activeHandle = fileHandlesRef.current[currentActiveId];
+        if (autoSaveEnabledRef.current && activeHandle) {
           const docData = updatedDocs[docIndex];
           if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
           autoSaveTimeoutRef.current = setTimeout(async () => {
@@ -1760,7 +1783,7 @@ export default function App() {
                 appState: docData.appState || {},
                 files: docData.files || {}
               }, null, 2);
-              const writable = await fileHandleRef.current.createWritable();
+              const writable = await activeHandle.createWritable();
               await writable.write(dataStr);
               await writable.close();
               setAutoSaveDiskStatus("saved");
@@ -2248,7 +2271,7 @@ export default function App() {
   }, [loading, excalidrawAPI]);
 
   // Export board to a local .shiva file (download)
-  const exportBoard = () => {
+  function exportBoard() {
     const activeDoc = documents.find(d => d.id === activeDocId);
     if (!activeDoc) return;
 
@@ -2268,15 +2291,15 @@ export default function App() {
     linkElement.setAttribute('download', exportFileDefaultName);
     linkElement.click();
     showToast("Drawing exported as .shiva file 💾");
-  };
+  }
 
   // ─── Auto-Save to Disk (File System Access API) ────────────────────────────
 
   // Pick a file location on disk and store the handle for subsequent auto-saves
-  const pickSaveFile = async (docTitle = "") => {
+  async function pickSaveFile(docTitle = "") {
     if (!window.showSaveFilePicker) {
       showToast("Auto-save to disk requires Chrome or Edge browser", "error");
-      return false;
+      return null;
     }
     try {
       const suggestedName = (docTitle || "drawing").replace(/\s+/g, "_") + ".shiva";
@@ -2287,34 +2310,36 @@ export default function App() {
           accept: { "application/json": [".shiva"] }
         }]
       });
-      fileHandleRef.current = handle;
+      // Store in our board-specific map
+      fileHandlesRef.current[activeDocIdRef.current] = handle;
       setAutoSaveFileName(handle.name);
-      showToast(`Auto-save enabled → ${handle.name} 💾`, "success");
-      return true;
+      showToast(`Linked to disk file → ${handle.name} 💾`, "success");
+      return handle;
     } catch (err) {
       if (err.name !== "AbortError") {
         console.error("File picker error:", err);
         showToast("Could not open file picker", "error");
       }
-      return false;
+      return null;
     }
-  };
+  }
 
   // Toggle auto-save: prompt for file location if turning on and no handle yet
-  const handleToggleAutoSave = async (checked) => {
+  async function handleToggleAutoSave(checked) {
     autoSaveEnabledRef.current = checked;
     if (checked) {
-      if (!fileHandleRef.current) {
+      const currentHandle = fileHandlesRef.current[activeDocId];
+      if (!currentHandle) {
         const activeDoc = documents.find(d => d.id === activeDocId);
-        const ok = await pickSaveFile(activeDoc?.title || "drawing");
-        if (!ok) {
+        const handle = await pickSaveFile(activeDoc?.title || "drawing");
+        if (!handle) {
           // User cancelled the picker — keep auto-save off
           autoSaveEnabledRef.current = false;
           setAutoSaveEnabled(false);
           return;
         }
       } else {
-        showToast(`Auto-save ON → ${fileHandleRef.current.name} 💾`);
+        showToast(`Auto-save ON → ${currentHandle.name} 💾`);
       }
       setAutoSaveEnabled(true);
     } else {
@@ -2322,17 +2347,16 @@ export default function App() {
       setAutoSaveDiskStatus("idle");
       showToast("Auto-save to disk disabled", "info");
     }
-  };
+  }
 
   // Manual "Save Now" to disk — always writes immediately
-  const saveNowToDisk = async () => {
+  async function saveNowToDisk() {
     const activeDoc = documents.find(d => d.id === activeDocId);
     if (!activeDoc) return;
-    let handle = fileHandleRef.current;
+    let handle = fileHandlesRef.current[activeDoc.id];
     if (!handle) {
-      const ok = await pickSaveFile(activeDoc.title);
-      if (!ok) return;
-      handle = fileHandleRef.current;
+      handle = await pickSaveFile(activeDoc.title);
+      if (!handle) return;
     }
     try {
       setAutoSaveDiskStatus("saving");
@@ -2355,7 +2379,7 @@ export default function App() {
       showToast("Save to disk failed!", "error");
       setTimeout(() => setAutoSaveDiskStatus("idle"), 3000);
     }
-  };
+  }
 
   // Backup all drawings to a single JSON file
   const backupAllDrawings = () => {
@@ -2516,6 +2540,56 @@ export default function App() {
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
+
+  // Intercept drag-and-drop of .shiva files globally to prevent Excalidraw from crashing with "invalid file"
+  useEffect(() => {
+    const handleDragOver = (e) => {
+      e.preventDefault();
+    };
+
+    const handleDrop = async (e) => {
+      const files = Array.from(e.dataTransfer?.files || []);
+      const shivaFiles = files.filter(file => file.name.endsWith(".shiva"));
+
+      if (shivaFiles.length > 0) {
+        // Intercept it completely before Excalidraw's listener can run
+        e.preventDefault();
+        e.stopPropagation();
+
+        for (const file of shivaFiles) {
+          const fileReader = new FileReader();
+          fileReader.onload = (event) => {
+            try {
+              const parsed = JSON.parse(event.target.result);
+              if (parsed && Array.isArray(parsed.elements)) {
+                createNewBoard(
+                  parsed.title || file.name.replace(/\.shiva$/, "").replace(/_/g, " "),
+                  parsed.elements,
+                  parsed.appState || {},
+                  parsed.files || {}
+                );
+                showToast(`"${file.name}" imported successfully! 🎨`);
+              } else {
+                showToast("Invalid file format: must contain elements array", "error");
+              }
+            } catch (err) {
+              showToast("Error reading file", "error");
+            }
+          };
+          fileReader.readAsText(file);
+        }
+      }
+    };
+
+    // Use capture phase (true) to intercept the drop event before Excalidraw can process it
+    window.addEventListener("dragover", handleDragOver, true);
+    window.addEventListener("drop", handleDrop, true);
+
+    return () => {
+      window.removeEventListener("dragover", handleDragOver, true);
+      window.removeEventListener("drop", handleDrop, true);
     };
   }, []);
 
@@ -2986,7 +3060,14 @@ export default function App() {
           {/* Excalidraw container */}
           {!loading && (
             <Excalidraw
-              excalidrawAPI={(api) => setExcalidrawAPI(api)}
+              excalidrawAPI={(api) => {
+                setExcalidrawAPI(api);
+                // Keep switching blocked initially to prevent Excalidraw from writing empty canvas
+                // during mount loading phase
+                setTimeout(() => {
+                  isSwitchingRef.current = false;
+                }, 1000);
+              }}
               theme={theme}
               initialData={initialDataRef.current}
               onChange={handleCanvasChange}
