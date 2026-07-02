@@ -2283,9 +2283,23 @@ export default function App() {
       files: activeDoc.files || {}
     }, null, 2);
 
-    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
-    const exportFileDefaultName = `${activeDoc.title.replace(/\s+/g, "_")}.shiva`;
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const dateString = `${year}-${month}-${day}-${hours}${minutes}`;
 
+    const cleanTitle = activeDoc.title
+      .replace(/[\uD800-\uDFFF]./g, "")
+      .replace(/[^\w\s-]/g, "")
+      .trim()
+      .replace(/\s+/g, "_");
+
+    const exportFileDefaultName = `${cleanTitle}-${dateString}.shiva`;
+
+    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
     const linkElement = document.createElement('a');
     linkElement.setAttribute('href', dataUri);
     linkElement.setAttribute('download', exportFileDefaultName);
@@ -2302,7 +2316,21 @@ export default function App() {
       return null;
     }
     try {
-      const suggestedName = (docTitle || "drawing").replace(/\s+/g, "_") + ".shiva";
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      const dateString = `${year}-${month}-${day}-${hours}${minutes}`;
+
+      const cleanTitle = (docTitle || "drawing")
+        .replace(/[\uD800-\uDFFF]./g, "")
+        .replace(/[^\w\s-]/g, "")
+        .trim()
+        .replace(/\s+/g, "_");
+
+      const suggestedName = `${cleanTitle}-${dateString}.shiva`;
       const handle = await window.showSaveFilePicker({
         suggestedName,
         types: [{
