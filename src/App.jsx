@@ -324,6 +324,7 @@ export default function App() {
   // Map of docId -> FileSystemFileHandle to support per-board file handles
   const fileHandlesRef = useRef({});
   const autoSaveTimeoutRef = useRef(null);
+  const lastDiskSaveTimeRef = useRef(0);
 
   const [showNotifications, setShowNotifications] = useState(() => {
     const saved = localStorage.getItem("shivadraw_show_notifications");
@@ -1773,6 +1774,10 @@ export default function App() {
         if (autoSaveEnabledRef.current && activeHandle) {
           const docData = updatedDocs[docIndex];
           if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
+          
+          const timeSinceLastSave = Date.now() - lastDiskSaveTimeRef.current;
+          const saveDelay = Math.max(500, 30000 - timeSinceLastSave); // 30 seconds throttle
+
           autoSaveTimeoutRef.current = setTimeout(async () => {
             try {
               setAutoSaveDiskStatus("saving");
@@ -1786,6 +1791,7 @@ export default function App() {
               const writable = await activeHandle.createWritable();
               await writable.write(dataStr);
               await writable.close();
+              lastDiskSaveTimeRef.current = Date.now();
               setAutoSaveDiskStatus("saved");
               // Reset to idle after 2s
               setTimeout(() => setAutoSaveDiskStatus("idle"), 2000);
@@ -1794,7 +1800,7 @@ export default function App() {
               setAutoSaveDiskStatus("error");
               setTimeout(() => setAutoSaveDiskStatus("idle"), 3000);
             }
-          }, 300);
+          }, saveDelay);
         }
 
         return updatedDocs;
@@ -2398,8 +2404,14 @@ export default function App() {
       const writable = await handle.createWritable();
       await writable.write(dataStr);
       await writable.close();
+      lastDiskSaveTimeRef.current = Date.now();
       setAutoSaveDiskStatus("saved");
-      showToast(`Saved to ${handle.name} ✅`);
+      
+      // Automatically enable Auto-Save option on successful save
+      autoSaveEnabledRef.current = true;
+      setAutoSaveEnabled(true);
+
+      showToast(`Saved & Auto-save enabled → ${handle.name} ✅`);
       setTimeout(() => setAutoSaveDiskStatus("idle"), 2000);
     } catch (err) {
       console.error("Save to disk failed:", err);
