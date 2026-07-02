@@ -1805,7 +1805,7 @@ export default function App() {
         }
       }, 50);
     }
-  };
+  }, [excalidrawAPI, brushSmoothing]);
 
 
 
