@@ -1541,7 +1541,7 @@ export default function App() {
   useEffect(() => {
     if (autoSaveFileName) {
       const cleanName = autoSaveFileName.replace(/\.shiva$/, "");
-      document.title = `${cleanName} - Shiva Canvas`;
+      document.title = cleanName;
     } else {
       document.title = "Shiva Canvas";
     }
