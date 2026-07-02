@@ -111,8 +111,10 @@ const sanitizeAppState = (appState) => {
     currentItemStrokeStyle: appState.currentItemStrokeStyle,
     currentItemRoughness: appState.currentItemRoughness,
     currentItemOpacity: appState.currentItemOpacity,
-    currentItemFontFamily: appState.currentItemFontFamily,
-    currentItemFontSize: appState.currentItemFontSize,
+    // NOTE: currentItemFontFamily and currentItemFontSize are intentionally NOT
+    // persisted. Saving them caused a bug where changing one text element's font
+    // would make that font the "default" for the whole scene on next reload.
+    // Each element stores its own fontFamily directly on the element itself.
     currentItemTextAlign: appState.currentItemTextAlign,
     currentItemStartArrowhead: appState.currentItemStartArrowhead,
     currentItemEndArrowhead: appState.currentItemEndArrowhead,
@@ -126,6 +128,7 @@ const sanitizeAppState = (appState) => {
     scrollY: appState.scrollY
   };
 };
+
 
 const smoothPoints = (points, iterations = 2) => {
   if (points.length < 3) return points;
@@ -313,6 +316,7 @@ export default function App() {
   });
   const [saveStatus, setSaveStatus] = useState("saved"); // "saved" | "saving"
   const [searchQuery, setSearchQuery] = useState("");
+  const [pdfDialogOpen, setPdfDialogOpen] = useState(false);
 
   const [showNotifications, setShowNotifications] = useState(() => {
     const saved = localStorage.getItem("shivadraw_show_notifications");
@@ -1879,147 +1883,215 @@ export default function App() {
     }
   };
 
-  // Export canvas drawing to PDF via browser native print dialog
-  const exportAsPdf = async () => {
+  // ─── Build the shared print-window HTML ────────────────────────────────────
+  const buildAndOpenPrintWindow = async (mode) => {
     if (!excalidrawAPI) {
       showToast("Canvas API not ready yet", "error");
       return;
     }
-
     const elements = excalidrawAPI.getSceneElements();
     const activeElements = elements.filter(el => !el.isDeleted);
-
     if (activeElements.length === 0) {
       showToast("Canvas is empty. Add elements to export.", "error");
       return;
     }
-
     const appState = excalidrawAPI.getAppState();
-
     try {
       showToast("Preparing PDF...");
-
       const svg = await exportToSvg({
         elements: activeElements,
-        appState: {
-          ...appState,
-          exportBackground: true,
-          exportWithDarkMode: false,
-        },
+        appState: { ...appState, exportBackground: true, exportWithDarkMode: false },
         files: excalidrawAPI.getFiles() || {}
       });
-
-      // Get the SVG dimensions for correct page sizing
-      const svgWidth = svg.getAttribute("width") || "1600";
-      const svgHeight = svg.getAttribute("height") || "900";
+      const svgWidth  = parseFloat(svg.getAttribute("width")  || "1600");
+      const svgHeight = parseFloat(svg.getAttribute("height") || "900");
       const svgString = new XMLSerializer().serializeToString(svg);
-      const docTitle = (activeDoc?.title || "drawing").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const docTitle  = (activeDoc?.title || "drawing")
+        .replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-      // Determine page orientation based on aspect ratio
-      const w = parseFloat(svgWidth);
-      const h = parseFloat(svgHeight);
-      const orientation = w >= h ? "landscape" : "portrait";
+      // Collect @font-face rules from the main document
+      let fontFaceCSS = "";
+      try {
+        for (const sheet of Array.from(document.styleSheets)) {
+          try {
+            for (const rule of Array.from(sheet.cssRules || [])) {
+              if (rule instanceof CSSFontFaceRule) fontFaceCSS += rule.cssText + "\n";
+            }
+          } catch (e) { /* cross-origin sheet — skip */ }
+        }
+      } catch (e) { /* ignore */ }
 
-      // Open a clean print window with the SVG fitted to page
       const printWindow = window.open("", "_blank", "width=900,height=700");
       if (!printWindow) {
         showToast("Pop-up blocked. Please allow pop-ups for this site.", "error");
         return;
       }
 
-      printWindow.document.write(`<!DOCTYPE html>
+      if (mode === "single") {
+        // ── Single page: fit the whole drawing onto one page ──────────────────
+        const orientation = svgWidth >= svgHeight ? "landscape" : "portrait";
+        printWindow.document.write(`<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <title>${docTitle}</title>
   <style>
+    ${fontFaceCSS}
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; }
-    @page {
-      size: ${orientation};
-      margin: 0.5cm;
-    }
+    @page { size: ${orientation}; margin: 0.5cm; }
     body {
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      display: flex; align-items: center; justify-content: center;
       background: white;
-      print-color-adjust: exact;
-      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact; -webkit-print-color-adjust: exact;
     }
-    .drawing-container {
-      width: 100%;
-      max-width: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+    .drawing-container { width: 100%; max-width: 100%; display: flex; align-items: center; justify-content: center; }
+    .drawing-container svg { max-width: 100%; max-height: 100vh; width: auto; height: auto; }
+    .footer { position: fixed; bottom: 0.3cm; right: 0.5cm; font-size: 8pt; color: #94a3b8; font-family: sans-serif; }
+    @media screen {
+      body { background: #f1f5f9; padding: 2rem; }
+      .drawing-container { background: white; border-radius: 12px; padding: 2rem; box-shadow: 0 4px 32px rgba(0,0,0,0.12); }
+      .print-btn { position: fixed; top: 1.5rem; right: 1.5rem; background: linear-gradient(135deg,#6366f1,#ec4899); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 10px; font-size: 1rem; font-weight: 600; cursor: pointer; box-shadow: 0 4px 12px rgba(99,102,241,0.4); z-index: 999; font-family: sans-serif; }
+      .print-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+      @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+      .drawing-container { animation: fadeIn 0.3s ease; }
     }
-    .drawing-container svg {
-      max-width: 100%;
-      max-height: 100vh;
-      width: auto;
-      height: auto;
+    @media print { .print-btn { display: none; } }
+  </style>
+</head>
+<body>
+  <button class="print-btn" onclick="window.print()">🖨️ Save as PDF</button>
+  <div class="drawing-container">${svgString}</div>
+  <div class="footer">${docTitle} &mdash; Shiva Canvas</div>
+  <script>
+    window.onload = () => {
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(() => setTimeout(() => window.print(), 300));
+      } else { setTimeout(() => window.print(), 800); }
+    };
+  <\/script>
+</body>
+</html>`);
+
+      } else {
+        // ── A4 multi-page: render SVG tile-by-tile onto A4 sheets ─────────────
+        // A4 at 96 dpi: 794 × 1123 px  (portrait)
+        const A4_W = 794;
+        const A4_H = 1123;
+        const MARGIN = 40; // px inside each page
+        const printW = A4_W - MARGIN * 2;
+        const printH = A4_H - MARGIN * 2;
+
+        // Scale factor so the drawing fits the page width
+        const scale = printW / svgWidth;
+        const scaledH = svgHeight * scale;
+        const pageCount = Math.ceil(scaledH / printH);
+
+        printWindow.document.write(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>${docTitle}</title>
+  <style>
+    ${fontFaceCSS}
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    @page { size: A4 portrait; margin: 0; }
+    body { background: #e2e8f0; }
+    .page {
+      width: ${A4_W}px;
+      height: ${A4_H}px;
+      overflow: hidden;
+      position: relative;
+      background: white;
+      page-break-after: always;
+      break-after: page;
     }
-    .footer {
-      position: fixed;
-      bottom: 0.3cm;
-      right: 0.5cm;
+    .page:last-child { page-break-after: auto; break-after: auto; }
+    .page-inner {
+      position: absolute;
+      top: ${MARGIN}px;
+      left: ${MARGIN}px;
+      width: ${printW}px;
+      height: ${printH}px;
+      overflow: hidden;
+    }
+    .svg-wrap {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: ${printW}px;
+      /* height changes per page via inline style */
+      transform-origin: top left;
+    }
+    .svg-wrap svg { width: ${printW}px; height: ${scaledH}px; display: block; }
+    .page-label {
+      position: absolute;
+      bottom: 6px;
+      right: 12px;
       font-size: 8pt;
       color: #94a3b8;
       font-family: sans-serif;
     }
     @media screen {
-      body { background: #f1f5f9; padding: 2rem; }
-      .drawing-container {
-        background: white;
-        border-radius: 12px;
-        padding: 2rem;
-        box-shadow: 0 4px 32px rgba(0,0,0,0.12);
-      }
+      body { padding: 2rem; display: flex; flex-direction: column; align-items: center; gap: 2rem; }
+      .page { border-radius: 6px; box-shadow: 0 4px 24px rgba(0,0,0,0.15); }
       .print-btn {
-        position: fixed;
-        top: 1.5rem;
-        right: 1.5rem;
-        background: linear-gradient(135deg, #6366f1, #ec4899);
-        color: white;
-        border: none;
-        padding: 0.75rem 1.5rem;
-        border-radius: 10px;
-        font-size: 1rem;
-        font-weight: 600;
-        cursor: pointer;
-        box-shadow: 0 4px 12px rgba(99,102,241,0.4);
-        z-index: 999;
-        font-family: sans-serif;
+        position: fixed; top: 1.5rem; right: 1.5rem;
+        background: linear-gradient(135deg,#6366f1,#ec4899);
+        color: white; border: none; padding: 0.75rem 1.5rem;
+        border-radius: 10px; font-size: 1rem; font-weight: 600;
+        cursor: pointer; box-shadow: 0 4px 12px rgba(99,102,241,0.4);
+        z-index: 999; font-family: sans-serif;
       }
       .print-btn:hover { opacity: 0.9; transform: translateY(-1px); }
-      @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-      .drawing-container { animation: fadeIn 0.3s ease; }
     }
-    @media print {
-      .print-btn { display: none; }
-    }
+    @media print { .print-btn { display: none; } body { background: white; padding: 0; gap: 0; } }
   </style>
 </head>
 <body>
   <button class="print-btn" onclick="window.print()">🖨️ Save as PDF</button>
-  <div class="drawing-container">
-    ${svgString}
-  </div>
-  <div class="footer">${docTitle} &mdash; Shiva Canvas</div>
+  ${Array.from({ length: pageCount }, (_, i) => {
+    const offsetY = -(i * printH); // shift SVG up by one page height per page
+    return `<div class="page">
+    <div class="page-inner">
+      <div class="svg-wrap" style="top:${offsetY}px">${svgString}</div>
+    </div>
+    <div class="page-label">${docTitle} &mdash; Page ${i + 1} / ${pageCount} &mdash; Shiva Canvas</div>
+  </div>`;
+  }).join("\n")}
   <script>
-    // Auto-trigger print after SVG renders
-    window.onload = () => setTimeout(() => window.print(), 400);
+    window.onload = () => {
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(() => setTimeout(() => window.print(), 400));
+      } else { setTimeout(() => window.print(), 900); }
+    };
   <\/script>
 </body>
 </html>`);
-      printWindow.document.close();
+      }
 
+      printWindow.document.close();
     } catch (err) {
       console.error("PDF export error:", err);
       showToast("Failed to prepare PDF", "error");
     }
   };
+
+  // Export canvas drawing to PDF — opens mode picker dialog
+  const exportAsPdf = () => {
+    if (!excalidrawAPI) {
+      showToast("Canvas API not ready yet", "error");
+      return;
+    }
+    const elements = excalidrawAPI.getSceneElements();
+    const activeElements = elements.filter(el => !el.isDeleted);
+    if (activeElements.length === 0) {
+      showToast("Canvas is empty. Add elements to export.", "error");
+      return;
+    }
+    setPdfDialogOpen(true);
+  };
+
 
 
   const copyToClipboard = async () => {
@@ -2727,6 +2799,57 @@ export default function App() {
           </div>
         );
       })()}
+
+      {/* PDF Export Mode Dialog */}
+      {pdfDialogOpen && (
+        <div className="pdf-dialog-overlay" onClick={() => setPdfDialogOpen(false)}>
+          <div className="pdf-dialog" onClick={e => e.stopPropagation()}>
+            <div className="pdf-dialog-header">
+              <span className="pdf-dialog-icon">📄</span>
+              <div>
+                <h2 className="pdf-dialog-title">Export as PDF</h2>
+                <p className="pdf-dialog-subtitle">Choose how your drawing fits on the page</p>
+              </div>
+              <button className="pdf-dialog-close" onClick={() => setPdfDialogOpen(false)}>✕</button>
+            </div>
+
+            <div className="pdf-dialog-cards">
+              {/* Single Page option */}
+              <button
+                className="pdf-mode-card"
+                onClick={() => { setPdfDialogOpen(false); buildAndOpenPrintWindow("single"); }}
+              >
+                <div className="pdf-mode-preview pdf-mode-preview--single">
+                  <div className="pdf-page-mock">
+                    <div className="pdf-page-content" />
+                  </div>
+                </div>
+                <div className="pdf-mode-info">
+                  <span className="pdf-mode-name">Single Page</span>
+                  <span className="pdf-mode-desc">Entire drawing scaled to fit one page. Landscape or portrait auto-selected.</span>
+                </div>
+                <span className="pdf-mode-arrow">→</span>
+              </button>
+
+              {/* A4 Multi-page option */}
+              <button
+                className="pdf-mode-card"
+                onClick={() => { setPdfDialogOpen(false); buildAndOpenPrintWindow("a4"); }}
+              >
+                <div className="pdf-mode-preview pdf-mode-preview--a4">
+                  <div className="pdf-page-mock pdf-page-mock--sm" style={{ transform: "translateY(-4px) translateX(-6px)" }} />
+                  <div className="pdf-page-mock pdf-page-mock--sm" style={{ transform: "translateY(4px) translateX(6px)" }} />
+                </div>
+                <div className="pdf-mode-info">
+                  <span className="pdf-mode-name">A4 Multi-page</span>
+                  <span className="pdf-mode-desc">Large drawings flow across multiple A4 portrait sheets with page numbers.</span>
+                </div>
+                <span className="pdf-mode-arrow">→</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

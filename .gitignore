@@ -82,3 +82,6 @@ dist-ssr/
 # Deployment guide
 README.md
 
+# Local scratch/dev folders (nested repos or temp files)
+sd/
+scratch/
