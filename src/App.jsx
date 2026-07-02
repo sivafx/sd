@@ -301,6 +301,7 @@ export default function App() {
   const fileInputRef = useRef(null);
   const backupInputRef = useRef(null);
   const isInitialMountRef = useRef(true);
+  const autoSaveEnabledRef = useRef(false); // mirror of autoSaveEnabled for use inside callbacks
   const initialDataRef = useRef(null);
   // Ref to guard setSaveStatus — avoids a React re-render on every 60fps onChange call
   const saveStatusRef = useRef("saved");
@@ -317,6 +318,12 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState("saved"); // "saved" | "saving"
   const [searchQuery, setSearchQuery] = useState("");
   const [pdfDialogOpen, setPdfDialogOpen] = useState(false);
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState(false);
+  const [autoSaveFileName, setAutoSaveFileName] = useState(""); // display name of the file handle
+  const [autoSaveDiskStatus, setAutoSaveDiskStatus] = useState("idle"); // "idle" | "saving" | "saved" | "error"
+  // Persisted file handle for auto-save-to-disk — survives doc switches but not page reloads
+  const fileHandleRef = useRef(null);
+  const autoSaveTimeoutRef = useRef(null);
 
   const [showNotifications, setShowNotifications] = useState(() => {
     const saved = localStorage.getItem("shivadraw_show_notifications");
@@ -1738,9 +1745,38 @@ export default function App() {
 
         saveStatusRef.current = "saved";
         setSaveStatus("saved");
+
+        // Auto-save to disk if enabled and a file handle is set
+        if (autoSaveEnabledRef.current && fileHandleRef.current) {
+          const docData = updatedDocs[docIndex];
+          if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
+          autoSaveTimeoutRef.current = setTimeout(async () => {
+            try {
+              setAutoSaveDiskStatus("saving");
+              const dataStr = JSON.stringify({
+                version: 1,
+                title: docData.title,
+                elements: docData.elements,
+                appState: docData.appState || {},
+                files: docData.files || {}
+              }, null, 2);
+              const writable = await fileHandleRef.current.createWritable();
+              await writable.write(dataStr);
+              await writable.close();
+              setAutoSaveDiskStatus("saved");
+              // Reset to idle after 2s
+              setTimeout(() => setAutoSaveDiskStatus("idle"), 2000);
+            } catch (err) {
+              console.error("Auto-save to disk failed:", err);
+              setAutoSaveDiskStatus("error");
+              setTimeout(() => setAutoSaveDiskStatus("idle"), 3000);
+            }
+          }, 300);
+        }
+
         return updatedDocs;
       });
-    }, 1000); // 1-second debounce
+    }, 500); // 500ms debounce — more frequent saves to survive unexpected shutdowns
   }, [excalidrawAPI]);
 
   // Handle smoothing on pointer up (when drawing ends)
@@ -2211,7 +2247,7 @@ export default function App() {
     };
   }, [loading, excalidrawAPI]);
 
-  // Export board to a local .json file
+  // Export board to a local .shiva file (download)
   const exportBoard = () => {
     const activeDoc = documents.find(d => d.id === activeDocId);
     if (!activeDoc) return;
@@ -2225,13 +2261,100 @@ export default function App() {
     }, null, 2);
 
     const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
-    const exportFileDefaultName = `${activeDoc.title.replace(/\s+/g, "_")}.json`;
+    const exportFileDefaultName = `${activeDoc.title.replace(/\s+/g, "_")}.shiva`;
 
     const linkElement = document.createElement('a');
     linkElement.setAttribute('href', dataUri);
     linkElement.setAttribute('download', exportFileDefaultName);
     linkElement.click();
-    showToast("Drawing JSON exported");
+    showToast("Drawing exported as .shiva file 💾");
+  };
+
+  // ─── Auto-Save to Disk (File System Access API) ────────────────────────────
+
+  // Pick a file location on disk and store the handle for subsequent auto-saves
+  const pickSaveFile = async (docTitle = "") => {
+    if (!window.showSaveFilePicker) {
+      showToast("Auto-save to disk requires Chrome or Edge browser", "error");
+      return false;
+    }
+    try {
+      const suggestedName = (docTitle || "drawing").replace(/\s+/g, "_") + ".shiva";
+      const handle = await window.showSaveFilePicker({
+        suggestedName,
+        types: [{
+          description: "Shiva Canvas File",
+          accept: { "application/json": [".shiva"] }
+        }]
+      });
+      fileHandleRef.current = handle;
+      setAutoSaveFileName(handle.name);
+      showToast(`Auto-save enabled → ${handle.name} 💾`, "success");
+      return true;
+    } catch (err) {
+      if (err.name !== "AbortError") {
+        console.error("File picker error:", err);
+        showToast("Could not open file picker", "error");
+      }
+      return false;
+    }
+  };
+
+  // Toggle auto-save: prompt for file location if turning on and no handle yet
+  const handleToggleAutoSave = async (checked) => {
+    autoSaveEnabledRef.current = checked;
+    if (checked) {
+      if (!fileHandleRef.current) {
+        const activeDoc = documents.find(d => d.id === activeDocId);
+        const ok = await pickSaveFile(activeDoc?.title || "drawing");
+        if (!ok) {
+          // User cancelled the picker — keep auto-save off
+          autoSaveEnabledRef.current = false;
+          setAutoSaveEnabled(false);
+          return;
+        }
+      } else {
+        showToast(`Auto-save ON → ${fileHandleRef.current.name} 💾`);
+      }
+      setAutoSaveEnabled(true);
+    } else {
+      setAutoSaveEnabled(false);
+      setAutoSaveDiskStatus("idle");
+      showToast("Auto-save to disk disabled", "info");
+    }
+  };
+
+  // Manual "Save Now" to disk — always writes immediately
+  const saveNowToDisk = async () => {
+    const activeDoc = documents.find(d => d.id === activeDocId);
+    if (!activeDoc) return;
+    let handle = fileHandleRef.current;
+    if (!handle) {
+      const ok = await pickSaveFile(activeDoc.title);
+      if (!ok) return;
+      handle = fileHandleRef.current;
+    }
+    try {
+      setAutoSaveDiskStatus("saving");
+      const dataStr = JSON.stringify({
+        version: 1,
+        title: activeDoc.title,
+        elements: activeDoc.elements,
+        appState: activeDoc.appState || {},
+        files: activeDoc.files || {}
+      }, null, 2);
+      const writable = await handle.createWritable();
+      await writable.write(dataStr);
+      await writable.close();
+      setAutoSaveDiskStatus("saved");
+      showToast(`Saved to ${handle.name} ✅`);
+      setTimeout(() => setAutoSaveDiskStatus("idle"), 2000);
+    } catch (err) {
+      console.error("Save to disk failed:", err);
+      setAutoSaveDiskStatus("error");
+      showToast("Save to disk failed!", "error");
+      setTimeout(() => setAutoSaveDiskStatus("idle"), 3000);
+    }
   };
 
   // Backup all drawings to a single JSON file
@@ -2310,7 +2433,7 @@ export default function App() {
     e.target.value = "";
   };
 
-  // Import board from a .json file
+  // Import board from a .shiva or .json file
   const handleImport = (e) => {
     const fileReader = new FileReader();
     const file = e.target.files[0];
@@ -2321,6 +2444,7 @@ export default function App() {
         const parsed = JSON.parse(event.target.result);
         if (parsed && Array.isArray(parsed.elements)) {
           createNewBoard(parsed.title || "Imported Board", parsed.elements, parsed.appState || {}, parsed.files || {});
+          showToast("Drawing imported successfully! 🎨");
         } else {
           showToast("Invalid file format: must contain elements array", "error");
         }
@@ -2332,6 +2456,68 @@ export default function App() {
     // Reset file input
     e.target.value = "";
   };
+
+  // Emergency save: flush any pending debounced changes immediately to IndexedDB
+  // This runs on page unload (browser close/refresh) and on tab visibility change (power cut / switching away)
+  useEffect(() => {
+    const emergencySave = async () => {
+      const currentId = activeDocIdRef.current;
+      if (!currentId || !latestDataRef.current) return;
+
+      // Flush the pending debounced save immediately
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
+
+      // Build updated documents array with the latest canvas data
+      setDocuments(prevDocs => {
+        const docIndex = prevDocs.findIndex(d => d.id === currentId);
+        if (docIndex === -1) return prevDocs;
+
+        const updatedDocs = [...prevDocs];
+        const existingFiles = updatedDocs[docIndex].files || {};
+        const newFiles = latestDataRef.current.files || {};
+        updatedDocs[docIndex] = {
+          ...updatedDocs[docIndex],
+          elements: latestDataRef.current.elements || updatedDocs[docIndex].elements,
+          appState: latestDataRef.current.appState || updatedDocs[docIndex].appState,
+          files: { ...existingFiles, ...newFiles },
+          updatedAt: Date.now()
+        };
+
+        // Fire-and-forget IndexedDB write immediately (synchronous-as-possible)
+        setItem("shivadraw_docs", updatedDocs).catch(err => {
+          console.error("Emergency save to IndexedDB failed:", err);
+          // Fallback: try localStorage
+          try {
+            localStorage.setItem("shivadraw_docs", JSON.stringify(updatedDocs));
+          } catch (e) {}
+        });
+
+        return updatedDocs;
+      });
+    };
+
+    const handleBeforeUnload = () => {
+      emergencySave();
+    };
+
+    const handleVisibilityChange = () => {
+      // Save when user hides the tab (Alt+Tab, power loss, etc.)
+      if (document.visibilityState === "hidden") {
+        emergencySave();
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
 
   // Formatting date for document lists
   const formatTime = (timestamp) => {
@@ -2578,6 +2764,64 @@ export default function App() {
               }}
             />
           </div>
+
+          {/* ── Auto-Save to Disk ───────────────────── */}
+          <div style={{ borderTop: "1px solid var(--border-color)", marginTop: "calc(0.5rem * var(--ui-scale))", paddingTop: "calc(0.6rem * var(--ui-scale))" }}>
+            <div className="settings-row">
+              <div style={{ display: "flex", flexDirection: "column", gap: "calc(0.1rem * var(--ui-scale))" }}>
+                <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))", fontWeight: "600" }}>
+                  💾 Auto-save to Disk
+                </span>
+                {autoSaveEnabled && autoSaveFileName && (
+                  <span style={{
+                    fontSize: "calc(0.65rem * var(--ui-scale))",
+                    color: autoSaveDiskStatus === "error" ? "#ef4444" : autoSaveDiskStatus === "saving" ? "#f59e0b" : "#10b981",
+                    maxWidth: "calc(130px * var(--ui-scale))",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap"
+                  }} title={autoSaveFileName}>
+                    {autoSaveDiskStatus === "saving" ? "⏳ Saving..." : autoSaveDiskStatus === "saved" ? "✅ Saved!" : autoSaveDiskStatus === "error" ? "❌ Failed" : `→ ${autoSaveFileName}`}
+                  </span>
+                )}
+              </div>
+              <input
+                type="checkbox"
+                checked={autoSaveEnabled}
+                onChange={(e) => handleToggleAutoSave(e.target.checked)}
+                style={{
+                  cursor: "pointer",
+                  accentColor: "#10b981",
+                  width: "calc(16px * var(--ui-scale))",
+                  height: "calc(16px * var(--ui-scale))",
+                  flexShrink: 0
+                }}
+              />
+            </div>
+            {autoSaveEnabled && (
+              <div style={{ display: "flex", gap: "calc(0.3rem * var(--ui-scale))", marginTop: "calc(0.35rem * var(--ui-scale))" }}>
+                <button
+                  className="btn-secondary"
+                  onClick={saveNowToDisk}
+                  title="Save to disk right now"
+                  style={{ flex: 1, fontSize: "calc(0.72rem * var(--ui-scale))", padding: "calc(0.3rem * var(--ui-scale)) calc(0.4rem * var(--ui-scale))" }}
+                >
+                  💾 Save Now
+                </button>
+                <button
+                  className="btn-secondary"
+                  onClick={async () => {
+                    const activeDoc = documents.find(d => d.id === activeDocId);
+                    await pickSaveFile(activeDoc?.title || "drawing");
+                  }}
+                  title="Change the save file location"
+                  style={{ flex: 1, fontSize: "calc(0.72rem * var(--ui-scale))", padding: "calc(0.3rem * var(--ui-scale)) calc(0.4rem * var(--ui-scale))" }}
+                >
+                  📁 Change File
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Drawings Selector */}
@@ -2677,8 +2921,8 @@ export default function App() {
         {/* Controls / Settings */}
         <div className="settings-section">
           <h4 className="section-title">Controls</h4>
-          <button className="btn-secondary" onClick={exportBoard} title="Export board as Shiva Canvas JSON file">
-            <span>📤</span> Export JSON
+          <button className="btn-secondary" onClick={exportBoard} title="Export board as Shiva Canvas .shiva file">
+            <span>📤</span> Export .shiva
           </button>
           <button className="btn-secondary" onClick={() => exportAsImage("png")} title="Export drawing as PNG image">
             <span>🖼️</span> Export PNG
@@ -2692,8 +2936,8 @@ export default function App() {
           <button className="btn-secondary" onClick={() => exportAsImage("svg")} title="Export drawing as SVG vector file">
             <span>🌐</span> Export SVG
           </button>
-          <button className="btn-secondary" onClick={() => fileInputRef.current.click()} title="Import a Shiva Canvas JSON file">
-            <span>📥</span> Import JSON
+          <button className="btn-secondary" onClick={() => fileInputRef.current.click()} title="Import a Shiva Canvas .shiva file">
+            <span>📥</span> Import .shiva
           </button>
           <button className="btn-secondary" onClick={resetBoard} title="Clear the entire canvas">
             <span>🗑️</span> Reset Canvas
@@ -2717,7 +2961,7 @@ export default function App() {
           type="file"
           ref={fileInputRef}
           style={{ display: "none" }}
-          accept=".json"
+          accept=".shiva,.json"
           onChange={handleImport}
         />
         <input
@@ -2749,9 +2993,6 @@ export default function App() {
               onPointerUp={handlePointerUp}
             >
               <MainMenu>
-                <MainMenu.DefaultItems.LoadScene />
-                <MainMenu.DefaultItems.SaveToActiveFile />
-                <MainMenu.DefaultItems.Export />
                 <MainMenu.DefaultItems.Help />
                 <MainMenu.DefaultItems.ClearCanvas />
                 <MainMenu.Separator />
