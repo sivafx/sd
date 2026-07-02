@@ -1348,9 +1348,7 @@ export default function App() {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "o") {
         e.preventDefault();
         e.stopPropagation();
-        if (fileInputRef.current) {
-          fileInputRef.current.click();
-        }
+        openFileFromDisk();
         return;
       }
 
@@ -2531,6 +2529,68 @@ export default function App() {
     e.target.value = "";
   };
 
+  // Open a file from disk using the File System Access API to capture writeable handle for Auto-Save
+  async function openFileFromDisk() {
+    if (!window.showOpenFilePicker) {
+      // Fallback: trigger the hidden input click
+      if (fileInputRef.current) {
+        fileInputRef.current.click();
+      }
+      return;
+    }
+
+    try {
+      const [handle] = await window.showOpenFilePicker({
+        types: [{
+          description: "Shiva Canvas File",
+          accept: { "application/json": [".shiva"] }
+        }],
+        multiple: false
+      });
+
+      const file = await handle.getFile();
+      const text = await file.text();
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && Array.isArray(parsed.elements)) {
+          const docId = `doc-${Date.now()}`;
+          const clonedElements = cloneElements(parsed.elements);
+          const newDoc = {
+            id: docId,
+            title: parsed.title || file.name.replace(/\.shiva$/, "").replace(/_/g, " "),
+            updatedAt: Date.now(),
+            elements: clonedElements,
+            appState: parsed.appState || {},
+            files: parsed.files || {}
+          };
+
+          // Store the writeable handle in our map
+          fileHandlesRef.current[docId] = handle;
+
+          // Add to documents and activate it
+          setDocuments(prevDocs => [newDoc, ...prevDocs]);
+          setActiveDocId(docId);
+
+          // Automatically enable Auto-Save
+          autoSaveEnabledRef.current = true;
+          setAutoSaveEnabled(true);
+          setAutoSaveFileName(handle.name);
+
+          showToast(`"${file.name}" loaded & Auto-save enabled! 💾`);
+        } else {
+          showToast("Invalid file format: must contain elements array", "error");
+        }
+      } catch (err) {
+        showToast("Error parsing .shiva file content", "error");
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") {
+        console.error("Open file error:", err);
+        showToast("Could not open file", "error");
+      }
+    }
+  }
+
   // Emergency save: flush any pending debounced changes immediately to IndexedDB
   // This runs on page unload (browser close/refresh) and on tab visibility change (power cut / switching away)
   useEffect(() => {
@@ -3060,7 +3120,7 @@ export default function App() {
           <button className="btn-secondary" onClick={() => exportAsImage("svg")} title="Export drawing as SVG vector file">
             <span>🌐</span> Export SVG
           </button>
-          <button className="btn-secondary" onClick={() => fileInputRef.current.click()} title="Import a Shiva Canvas .shiva file">
+          <button className="btn-secondary" onClick={openFileFromDisk} title="Import a Shiva Canvas .shiva file">
             <span>📥</span> Import .shiva
           </button>
           <button className="btn-secondary" onClick={resetBoard} title="Clear the entire canvas">
