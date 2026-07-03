@@ -73,9 +73,17 @@ const createTextElement = (text, x, y, size = 20, custom = {}) =>
     ...custom
   });
 
+// Singleton canvas reused across all measureTextDimensions calls — avoids allocating a new
+// HTMLCanvasElement + CanvasRenderingContext2D on every call (costly during font refresh).
+let _measureCanvas = null;
+let _measureCtx = null;
+
 const measureTextDimensions = (text, fontSize, fontFamilyName, lineHeight = 1.25) => {
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
+  if (!_measureCanvas) {
+    _measureCanvas = document.createElement("canvas");
+    _measureCtx = _measureCanvas.getContext("2d");
+  }
+  const ctx = _measureCtx;
   if (!ctx) return { width: text.length * (fontSize * 0.6), height: fontSize * lineHeight };
   
   ctx.font = `${fontSize}px "${fontFamilyName}", sans-serif`;
@@ -308,6 +316,9 @@ export default function App() {
   // Single shared MutationObserver registry — avoids 4 separate body+subtree observers
   const sharedObserverCallbacks = useRef(new Set());
   const sharedObserverRef = useRef(null);
+  // Ref mirror of documents — allows emergency save / stable callbacks to read the latest
+  // docs without capturing them in a stale closure or needing them as effect deps.
+  const latestDocumentsRef = useRef([]);
   const [activeDropdown, setActiveDropdown] = useState(null);
   const [brushSmoothing, setBrushSmoothing] = useState(() => {
     return parseInt(localStorage.getItem("shivadraw_brush_smoothing") || "3", 10);
@@ -335,11 +346,11 @@ export default function App() {
     return saved ? saved === "true" : true;
   });
 
-  const handleToggleCanvasControls = (e) => {
+  const handleToggleCanvasControls = useCallback((e) => {
     const checked = e.target.checked;
     setShowCanvasControls(checked);
     localStorage.setItem("shivadraw_show_canvas_controls", checked);
-  };
+  }, []);
   const [uiScale, setUiScale] = useState(() => {
     const saved = localStorage.getItem("shivadraw_ui_scale");
     return saved ? parseFloat(saved) : 0.75;
@@ -368,10 +379,10 @@ export default function App() {
     };
   }, [showNotifications]);
 
-  const toggleDropdown = (name, e) => {
+  const toggleDropdown = useCallback((name, e) => {
     e.stopPropagation();
-    setActiveDropdown(activeDropdown === name ? null : name);
-  };
+    setActiveDropdown(prev => prev === name ? null : name);
+  }, []);
 
   // ─── Single shared MutationObserver for all DOM-injection features ───────────
   // Each feature effect registers a callback here instead of creating its own
@@ -402,6 +413,12 @@ export default function App() {
       localStorage.setItem("shivadraw_active_id", activeDocId);
     }
   }, [activeDocId]);
+
+  // Keep latestDocumentsRef always current so stable callbacks (emergency save, handleKeyDown)
+  // can read the latest docs without capturing them in stale closures or effect deps.
+  useEffect(() => {
+    latestDocumentsRef.current = documents;
+  }, [documents]);
 
   // Load documents on mount
   useEffect(() => {
@@ -807,10 +824,26 @@ export default function App() {
     // Run immediately for currently open menus
     injectCustomColors();
 
+    // Throttle via requestAnimationFrame: the shared MutationObserver fires on every DOM
+    // subtree change. Wrapping ensures at most one injection sweep per animation frame,
+    // eliminating redundant querySelectorAll traversals during active canvas drawing.
+    let rafId = null;
+    const throttledInject = () => {
+      if (rafId !== null) return; // already scheduled — skip
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        injectCustomColors();
+      });
+    };
+
     // Register with shared observer instead of creating a new body+subtree observer
-    sharedObserverCallbacks.current.add(injectCustomColors);
+    sharedObserverCallbacks.current.add(throttledInject);
     return () => {
-      sharedObserverCallbacks.current.delete(injectCustomColors);
+      sharedObserverCallbacks.current.delete(throttledInject);
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
     };
   }, [loading, predefinedColors, excalidrawAPI]);
 
@@ -938,7 +971,11 @@ export default function App() {
   useEffect(() => {
     if (loading) return;
 
-    let observer = null;
+    // isRunning guards against re-entrant calls: when interceptFontMenu makes its own
+    // DOM mutations, the shared MutationObserver would otherwise fire again immediately.
+    // This replaces the old disconnect/reconnect-observer pattern with a simple flag,
+    // eliminating the second body+subtree MutationObserver entirely.
+    let isRunning = false;
 
     const CUSTOM_FONTS = [
       "Inter",
@@ -951,18 +988,18 @@ export default function App() {
     ];
 
     const interceptFontMenu = () => {
-      const dropdown = document.querySelector(".dropdown-menu.fonts");
-      if (!dropdown) return;
-
-      const listWrapper = dropdown.querySelector(".ScrollableList__wrapper") || dropdown.querySelector(".dropdown-menu-container") || dropdown;
-      if (!listWrapper) return;
-
-      // Temporarily disconnect observer to prevent infinite loops from our own mutations
-      if (observer) {
-        observer.disconnect();
-      }
+      // Guard against re-entrant calls: our own DOM mutations (appending buttons, updating text)
+      // would otherwise immediately re-trigger the shared MutationObserver callback.
+      if (isRunning) return;
+      isRunning = true;
 
       try {
+        const dropdown = document.querySelector(".dropdown-menu.fonts");
+        if (!dropdown) return;
+
+        const listWrapper = dropdown.querySelector(".ScrollableList__wrapper") || dropdown.querySelector(".dropdown-menu-container") || dropdown;
+        if (!listWrapper) return;
+
         // Find original Excalifont button in the list to trigger click on it and style it
         const buttons = Array.from(listWrapper.querySelectorAll(".dropdown-menu-item, button"));
         let excalifontButton = buttons.find(btn => btn.hasAttribute("data-excalifont-button"));
@@ -1087,32 +1124,19 @@ export default function App() {
           listWrapper.appendChild(btn);
         });
       } finally {
-        // Reconnect observer
-        if (observer) {
-          observer.observe(document.body, {
-            childList: true,
-            subtree: true
-          });
-        }
+        // Always reset the guard so future observer callbacks can proceed
+        isRunning = false;
       }
     };
 
     interceptFontMenu();
 
-    // Register with shared observer instead of creating a new body+subtree observer
-    // Font menu observer also temporarily disconnects itself to prevent recursive loops,
-    // so it manages its own sub-observer for that disconnect/reconnect pattern.
-    observer = new MutationObserver(() => {
-      interceptFontMenu();
-    });
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
+    // Use the shared MutationObserver instead of a separate body+subtree observer.
+    // Re-entrant calls from our own DOM mutations are blocked by the isRunning guard above.
+    sharedObserverCallbacks.current.add(interceptFontMenu);
 
     return () => {
-      observer.disconnect();
+      sharedObserverCallbacks.current.delete(interceptFontMenu);
     };
   }, [loading, activeCustomFont]);
 
@@ -1529,11 +1553,14 @@ export default function App() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown, true);
     };
-  }, [excalidrawAPI, documents, activeDocId]);
+    // Note: documents and activeDocId are intentionally NOT in deps here.
+    // We read them via activeDocIdRef / latestDocumentsRef (always current) to avoid
+    // re-registering the listener on every canvas change (which updates documents state).
+  }, [excalidrawAPI]);
 
-  const showToast = (message, type = "success") => {
+  const showToast = useCallback((message, type = "success") => {
     setNotification({ message, type });
-  };
+  }, []);
 
   // Auto-dismiss notifications
   useEffect(() => {
@@ -1743,6 +1770,11 @@ export default function App() {
         return;
       }
 
+      // Snapshot active files BEFORE entering the setDocuments updater.
+      // React may call updater functions more than once in Concurrent Mode;
+      // calling the Excalidraw API inside an updater is unsafe.
+      const snapshotActiveFiles = (excalidrawAPI && excalidrawAPI.getFiles) ? excalidrawAPI.getFiles() : {};
+
       setDocuments(prevDocs => {
         const docIndex = prevDocs.findIndex(d => d.id === currentActiveId);
         if (docIndex === -1) {
@@ -1762,7 +1794,7 @@ export default function App() {
             .filter(el => el.type === "image" && el.fileId)
             .map(el => el.fileId)
         );
-        const activeFiles = (excalidrawAPI && excalidrawAPI.getFiles) ? excalidrawAPI.getFiles() : {};
+        const activeFiles = snapshotActiveFiles;
         for (const fileId in activeFiles) {
           referencedFileIds.add(fileId);
         }
@@ -2711,14 +2743,26 @@ export default function App() {
     };
   }, []);
 
-  // Formatting date for document lists
-  const formatTime = (timestamp) => {
+  // Formatting date for document lists (stable: no deps)
+  const formatTime = useCallback((timestamp) => {
     const d = new Date(timestamp);
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' ' + d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  };
+  }, []);
 
   // Memoized: avoids linear scan of documents array on every render
   const activeDoc = useMemo(() => documents.find(d => d.id === activeDocId), [documents, activeDocId]);
+
+  // Memoized watermark color — only recomputes when background style or theme changes
+  const watermarkColor = useMemo(() => {
+    const bgStyle = activeDoc?.backgroundStyle;
+    if (bgStyle && isPresetBackground(bgStyle)) {
+      return DARK_BACKGROUND_PRESETS.has(bgStyle) ? "#ffffff" : "var(--text-primary)";
+    } else if (bgStyle && !isPresetBackground(bgStyle)) {
+      return isColorDark(bgStyle) ? "#ffffff" : "var(--text-primary)";
+    }
+    return "var(--text-primary)";
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDoc?.backgroundStyle, theme]);
 
   return (
     <div className={`app-container ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"} ${showCanvasControls ? "show-canvas-controls" : "hide-canvas-controls"} ${showNotifications ? "show-toasts" : "hide-toasts"} ${propertiesPanelVisible ? "show-properties-panel" : "hide-properties-panel"}`}>
@@ -3213,33 +3257,18 @@ export default function App() {
         </div>
       )}
 
-      {/* Floating Vertical Brand Watermark */}
-      {(() => {
-        // Pick watermark color based on active background
-        const bgStyle = activeDoc?.backgroundStyle;
-        let watermarkColor;
-        if (bgStyle && isPresetBackground(bgStyle)) {
-          watermarkColor = DARK_BACKGROUND_PRESETS.has(bgStyle) ? "#ffffff" : "var(--text-primary)";
-        } else if (bgStyle && !isPresetBackground(bgStyle)) {
-          // Custom color — detect luminance
-          watermarkColor = isColorDark(bgStyle) ? "#ffffff" : "var(--text-primary)";
-        } else {
-          watermarkColor = "var(--text-primary)";
-        }
-        return (
-          <div
-            className="vertical-brand-watermark"
-            style={{
-              fontSize: watermarkSize !== "0" ? `${watermarkSize}rem` : undefined,
-              right: watermarkSize !== "0" ? `calc(15px + ${watermarkSize}rem / 2)` : undefined,
-              display: watermarkSize === "0" ? "none" : "block",
-              color: watermarkColor
-            }}
-          >
-            SHIVA
-          </div>
-        );
-      })()}
+      {/* Floating Vertical Brand Watermark — color pre-computed by watermarkColor useMemo */}
+      <div
+        className="vertical-brand-watermark"
+        style={{
+          fontSize: watermarkSize !== "0" ? `${watermarkSize}rem` : undefined,
+          right: watermarkSize !== "0" ? `calc(15px + ${watermarkSize}rem / 2)` : undefined,
+          display: watermarkSize === "0" ? "none" : "block",
+          color: watermarkColor
+        }}
+      >
+        SHIVA
+      </div>
 
       {/* PDF Export Mode Dialog */}
       {pdfDialogOpen && (
