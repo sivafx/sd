@@ -22,9 +22,6 @@ export default defineConfig(({ mode }) => ({
             if (id.includes("@excalidraw/excalidraw")) {
               return "vendor-excalidraw";
             }
-            if (id.includes("react") || id.includes("react-dom")) {
-              return "vendor-react";
-            }
             return "vendor-libs";
           }
         },
