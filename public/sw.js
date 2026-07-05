@@ -1,4 +1,4 @@
-const CACHE_NAME = 'shivadraw-cache-v12';
+const CACHE_NAME = 'shivadraw-cache-v13';
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();
@@ -25,10 +25,31 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(event.request.url);
 
-  // NEVER cache the HTML entry point — always fetch fresh so new JS/CSS bundles are picked up
+  // Network-first for the HTML entry point: fetch fresh when online, but CACHE it so we can fall back to it when offline
   if (url.pathname.endsWith('/') || url.pathname.endsWith('.html') || url.pathname === '/sd' || url.pathname === '/sd/') {
     event.respondWith(
-      fetch(event.request).catch(() => caches.match(event.request))
+      fetch(event.request)
+        .then((response) => {
+          if (response.status === 200) {
+            const responseClone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(event.request, responseClone);
+            });
+          }
+          return response;
+        })
+        .catch(() => {
+          return caches.match(event.request).then((cachedResponse) => {
+            if (cachedResponse) return cachedResponse;
+            // Fallback: If they requested index.html offline but we only cached root scope, or vice-versa
+            return caches.match(self.registration.scope)
+              .then((fallback) => {
+                if (fallback) return fallback;
+                const indexUrl = new URL('index.html', self.registration.scope).toString();
+                return caches.match(indexUrl);
+              });
+          });
+        })
     );
     return;
   }
