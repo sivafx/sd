@@ -1278,7 +1278,7 @@ export default function App() {
       return;
     }
 
-    const activeDoc = documents.find((d) => d.id === activeDocId);
+    const activeDoc = latestDocumentsRef.current.find((d) => d.id === activeDocId);
     if (activeDoc) {
       isSwitchingRef.current = true;
       
@@ -1291,8 +1291,6 @@ export default function App() {
           console.error("Error adding files to canvas:", e);
         }
       }
-
-
 
       // Determine if this doc has a custom/preset background so we can force transparency
       const hasCustomBg = activeDoc.backgroundStyle && activeDoc.backgroundStyle !== "solid-classic";
@@ -1331,7 +1329,7 @@ export default function App() {
         isSwitchingRef.current = false;
       }, 150);
     }
-  }, [activeDocId, excalidrawAPI, loading, documents, theme]);
+  }, [activeDocId, excalidrawAPI, loading]);
 
   // Inject logo inside Excalidraw toolbar dynamically and observe internally
   useEffect(() => {
