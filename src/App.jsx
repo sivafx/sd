@@ -323,9 +323,7 @@ export default function App() {
   const [brushSmoothing, setBrushSmoothing] = useState(() => {
     return parseInt(localStorage.getItem("shivadraw_brush_smoothing") || "3", 10);
   });
-  const [activeCustomFont, setActiveCustomFont] = useState(() => {
-    return localStorage.getItem("shivadraw_active_custom_font") || "Roboto";
-  });
+
   const [saveStatus, setSaveStatus] = useState("saved"); // "saved" | "saving"
   const [searchQuery, setSearchQuery] = useState("");
   const [pdfDialogOpen, setPdfDialogOpen] = useState(false);
@@ -847,149 +845,78 @@ export default function App() {
     };
   }, [loading, predefinedColors, excalidrawAPI]);
 
-  // Apply custom font CSS override on mount/change
+  // Recalculate text dimensions once fonts are loaded
   useEffect(() => {
-    if (loading) return;
+    if (!excalidrawAPI || loading) return;
 
     let isCurrent = true;
 
-    const applyFont = async () => {
-      // Clear any programmatically registered Excalifont faces from document.fonts
-      // to let stylesheet @font-face rules take effect.
-      try {
-        Array.from(document.fonts).forEach(font => {
-          const cleanFamily = font.family.replace(/['"]/g, "");
-          if (cleanFamily === "Excalifont") {
-            document.fonts.delete(font);
+    const refreshTextDimensions = () => {
+      const elements = excalidrawAPI.getSceneElements();
+      let hasUpdates = false;
+      const updatedElements = elements.map(el => {
+        if (el.type === "text") {
+          let fontName = "Nunito";
+          if (el.fontFamily === 1 || el.fontFamily === 5) {
+            fontName = "Excalifont";
+          } else if (el.fontFamily === 3) {
+            fontName = "Comic Shanns";
+          } else if (el.fontFamily === 4) {
+            fontName = "Lilita One";
           }
-        });
-      } catch (err) {
-        console.error("Error clearing document.fonts:", err);
-      }
-
-      let cssContent = "";
-
-      if (activeCustomFont !== "Excalifont") {
-        const cleanName = activeCustomFont.replace(/\s+/g, '-');
-        const baseUrl = import.meta.env.BASE_URL;
-        cssContent = `
-          @font-face {
-            font-family: "Excalifont";
-            src: url("${baseUrl}fonts/${cleanName}-Regular.woff2") format("woff2"),
-                 local("${activeCustomFont}"), 
-                 local("${activeCustomFont} Regular"), 
-                 local("${activeCustomFont}-Regular");
-            font-weight: 400;
-            font-style: normal;
-            font-display: swap;
+          const { width, height } = measureTextDimensions(
+            el.text,
+            el.fontSize,
+            fontName,
+            el.lineHeight ? Number(el.lineHeight) : 1.25
+          );
+          if (Math.abs(el.width - width) > 1 || Math.abs(el.height - height) > 1) {
+            hasUpdates = true;
+            return {
+              ...el,
+              width,
+              height,
+              version: el.version + 1,
+              versionNonce: Math.floor(Math.random() * 100000),
+              updated: Date.now()
+            };
           }
-          @font-face {
-            font-family: "Excalifont";
-            src: url("${baseUrl}fonts/${cleanName}-Bold.woff2") format("woff2"),
-                 local("${activeCustomFont} Bold"), 
-                 local("${activeCustomFont}-Bold");
-            font-weight: 700;
-            font-style: normal;
-            font-display: swap;
-          }
-        `;
-
-        try {
-          const fontFaceReg = new FontFace("Excalifont", `url("${baseUrl}fonts/${cleanName}-Regular.woff2"), local("${activeCustomFont}"), local("${activeCustomFont}-Regular")`, { weight: '400' });
-          const fontFaceBold = new FontFace("Excalifont", `url("${baseUrl}fonts/${cleanName}-Bold.woff2"), local("${activeCustomFont} Bold"), local("${activeCustomFont}-Bold")`, { weight: '700' });
-          
-          await Promise.all([
-            fontFaceReg.load().then(() => document.fonts.add(fontFaceReg)).catch(() => {}),
-            fontFaceBold.load().then(() => document.fonts.add(fontFaceBold)).catch(() => {})
-          ]);
-        } catch (err) {
-          console.error("Error creating local FontFace:", err);
         }
+        return el;
+      });
+
+      if (hasUpdates && isCurrent) {
+        excalidrawAPI.updateScene({ elements: updatedElements });
       }
-
-      if (!isCurrent) return;
-
-      let styleEl = document.getElementById("excalifont-override-style");
-      if (cssContent) {
-        if (!styleEl) {
-          styleEl = document.createElement("style");
-          styleEl.id = "excalifont-override-style";
-          document.head.appendChild(styleEl);
-        }
-        styleEl.textContent = cssContent;
-      } else {
-        if (styleEl) styleEl.remove();
-      }
-
-      localStorage.setItem("shivadraw_active_custom_font", activeCustomFont);
-
-      // Refresh canvas immediately to recalculate dimensions and redraw text
-      const refreshScene = () => {
-        if (excalidrawAPI && isCurrent) {
-          const elements = excalidrawAPI.getSceneElements().map(el => {
-            if (el.type === "text" && (el.fontFamily === 4 || el.fontFamily === 5)) {
-              const { width, height } = measureTextDimensions(
-                el.text, 
-                el.fontSize, 
-                activeCustomFont === "Excalifont" ? "Excalifont" : activeCustomFont,
-                el.lineHeight ? Number(el.lineHeight) : 1.25
-              );
-              return {
-                ...el,
-                width,
-                height,
-                version: el.version + 1,
-                versionNonce: Math.floor(Math.random() * 100000),
-                updated: Date.now()
-              };
-            }
-            return el;
-          });
-          excalidrawAPI.updateScene({ elements });
-        }
-      };
-
-      // Run immediately for instant local font swap
-      refreshScene();
-
-      // Also run after a short delay to ensure browser has processed the local font load
-      setTimeout(() => {
-        if (isCurrent) {
-          refreshScene();
-        }
-      }, 50);
     };
 
-    applyFont();
+    // Run after document fonts are fully loaded
+    document.fonts.ready.then(() => {
+      if (isCurrent) {
+        refreshTextDimensions();
+      }
+    });
+
+    // Run a fallback delay in case fonts take time to download/initialize
+    const timeoutId = setTimeout(() => {
+      if (isCurrent) {
+        refreshTextDimensions();
+      }
+    }, 150);
 
     return () => {
       isCurrent = false;
+      clearTimeout(timeoutId);
     };
-  }, [loading, activeCustomFont, excalidrawAPI]);
+  }, [excalidrawAPI, loading]);
 
-  // Intercept Excalidraw's built-in font menu to append our "More fonts" section
+  // Intercept Excalidraw's built-in font menu to customize labels and styles
   useEffect(() => {
     if (loading) return;
 
-    // isRunning guards against re-entrant calls: when interceptFontMenu makes its own
-    // DOM mutations, the shared MutationObserver would otherwise fire again immediately.
-    // This replaces the old disconnect/reconnect-observer pattern with a simple flag,
-    // eliminating the second body+subtree MutationObserver entirely.
     let isRunning = false;
 
-    const CUSTOM_FONTS = [
-      "Inter",
-      "Roboto",
-      "Montserrat",
-      "Playfair Display",
-      "Caveat",
-      "Pacifico",
-      "Fira Code"
-    ];
-
     const interceptFontMenu = () => {
-      // Guard against re-entrant calls: our own DOM mutations (appending buttons, updating text)
-      // would otherwise immediately re-trigger the shared MutationObserver callback.
       if (isRunning) return;
       isRunning = true;
 
@@ -1000,145 +927,55 @@ export default function App() {
         const listWrapper = dropdown.querySelector(".ScrollableList__wrapper") || dropdown.querySelector(".dropdown-menu-container") || dropdown;
         if (!listWrapper) return;
 
-        // Find original Excalifont button in the list to trigger click on it and style it
-        const buttons = Array.from(listWrapper.querySelectorAll(".dropdown-menu-item, button"));
-        let excalifontButton = buttons.find(btn => btn.hasAttribute("data-excalifont-button"));
-        
-        if (!excalifontButton) {
-          excalifontButton = buttons.find(btn => {
-            const testId = btn.getAttribute("data-testid");
-            const val = btn.getAttribute("value");
-            const textEl = btn.querySelector(".dropdown-menu-item__text") || btn;
-            const text = textEl.textContent.trim();
-            
-            return (
-              testId === "font-family-hand-drawn" ||
-              val === "4" ||
-              val === "5" ||
-              text.includes("Excalifont") ||
-              text.includes("Hand-drawn") ||
-              text.includes("Hand-Drawn")
-            );
-          });
-          if (excalifontButton) {
-            excalifontButton.setAttribute("data-excalifont-button", "true");
-            const textEl = excalifontButton.querySelector(".dropdown-menu-item__text") || excalifontButton;
-            excalifontButton.setAttribute("data-original-text", textEl.textContent.trim());
-          }
-        }
-
-        // Update the Excalifont button text if a custom font is active
-        if (excalifontButton) {
-          const textEl = excalifontButton.querySelector(".dropdown-menu-item__text") || excalifontButton;
-          if (activeCustomFont !== "Excalifont") {
-            if (textEl.textContent !== activeCustomFont) {
-              textEl.textContent = activeCustomFont;
-            }
-          } else {
-            const originalText = excalifontButton.getAttribute("data-original-text") || "Hand-drawn";
-            if (textEl.textContent !== originalText) {
-              textEl.textContent = originalText;
-            }
-          }
-        }
-
-        // Add click listeners to other original font buttons to reset activeCustomFont state
-        buttons.forEach(btn => {
-          if (btn === excalifontButton) return;
-          if (btn.classList.contains("dropdown-menu-item-base")) return; // skip custom buttons
-          if (!btn.hasAttribute("data-custom-reset-listener")) {
-            btn.setAttribute("data-custom-reset-listener", "true");
-            btn.addEventListener("click", () => {
-              setActiveCustomFont("Excalifont");
-            }, true);
-          }
+        // Hide group headers (like "In this scene" or "Available fonts") if they are present
+        const groupHeaders = listWrapper.querySelectorAll(".dropdown-menu-group-title, .dropdown-menu-item-group-title, h3, h4, span[class*='heading']");
+        groupHeaders.forEach(header => {
+          header.style.setProperty("display", "none", "important");
         });
 
-        // Check if we already injected our section
-        if (dropdown.querySelector(".shivadraw-more-fonts-title")) {
-          // Just update selected highlight styles for our custom buttons
-          const customButtons = Array.from(dropdown.querySelectorAll(".dropdown-menu-item-base"));
-          customButtons.forEach(btn => {
-            const btnFont = btn.style.fontFamily.replace(/['"]/g, "").split(",")[0].trim();
-            const isActive = activeCustomFont === btnFont;
-            if (isActive) {
-              if (!btn.classList.contains("dropdown-menu-item--selected")) {
-                btn.classList.add("dropdown-menu-item--selected");
-              }
-              if (excalifontButton && excalifontButton.classList.contains("dropdown-menu-item--selected")) {
-                excalifontButton.classList.remove("dropdown-menu-item--selected");
-              }
-            } else {
-              if (btn.classList.contains("dropdown-menu-item--selected")) {
-                btn.classList.remove("dropdown-menu-item--selected");
-              }
-            }
-          });
-          return;
-        }
+        const buttons = Array.from(listWrapper.querySelectorAll(".dropdown-menu-item, button"));
+        buttons.forEach(btn => {
+          const textEl = btn.querySelector(".dropdown-menu-item__text") || btn;
+          const text = textEl.textContent.trim();
+          const cleanText = text.replace(/['"]/g, "").toLowerCase();
 
-        // Create "More fonts" title header
-        const title = document.createElement("div");
-        title.className = "dropdown-menu-group-title shivadraw-more-fonts-title";
-        title.textContent = "More fonts";
-        title.style.marginTop = "0.75rem";
-        listWrapper.appendChild(title);
-
-        // Append custom font buttons
-        CUSTOM_FONTS.forEach(fontName => {
-          const btn = document.createElement("button");
-          btn.className = "dropdown-menu-item dropdown-menu-item-base";
-          btn.type = "button";
-          btn.style.fontFamily = `"${fontName}", sans-serif`;
-          
-          // Highlight active status
-          const isActive = activeCustomFont === fontName;
-          if (isActive) {
-            btn.classList.add("dropdown-menu-item--selected");
-            // If our custom font is active, Excalifont button shouldn't show active background
-            if (excalifontButton) {
-              excalifontButton.classList.remove("dropdown-menu-item--selected");
+          if (cleanText.includes("lilita") || cleanText.includes("heading")) {
+            // Hide the Heading font slot entirely so we only show Option B fonts
+            btn.style.setProperty("display", "none", "important");
+          } else if (cleanText.includes("nunito") || cleanText.includes("normal") || cleanText.includes("inter")) {
+            if (textEl.textContent !== "Inter (Normal)") {
+              textEl.textContent = "Inter (Normal)";
             }
+            btn.style.fontFamily = '"Inter", sans-serif';
+            btn.style.display = ""; // Ensure visible
+          } else if (cleanText.includes("comic") || cleanText.includes("shanns") || cleanText.includes("fira") || cleanText.includes("monospace") || cleanText.includes("code")) {
+            if (textEl.textContent !== "Fira Code (Monospace)") {
+              textEl.textContent = "Fira Code (Monospace)";
+            }
+            btn.style.fontFamily = '"Fira Code", monospace';
+            btn.style.display = ""; // Ensure visible
+          } else if (cleanText.includes("hand-drawn") || cleanText.includes("excalifont") || cleanText.includes("caveat")) {
+            if (textEl.textContent !== "Caveat (Hand-drawn)") {
+              textEl.textContent = "Caveat (Hand-drawn)";
+            }
+            btn.style.fontFamily = '"Caveat", sans-serif';
+            btn.style.fontSize = "1.1rem";
+            btn.style.display = ""; // Ensure visible
           }
-
-          const textSpan = document.createElement("span");
-          textSpan.className = "dropdown-menu-item__text";
-          textSpan.textContent = fontName;
-          btn.appendChild(textSpan);
-
-          btn.addEventListener("click", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-
-            // Set active custom font
-            setActiveCustomFont(fontName);
-
-            // Trigger Excalifont click asynchronously to let React finish current event cycle
-            setTimeout(() => {
-              if (excalifontButton) {
-                excalifontButton.click();
-              }
-            }, 0);
-          });
-
-          listWrapper.appendChild(btn);
         });
       } finally {
-        // Always reset the guard so future observer callbacks can proceed
         isRunning = false;
       }
     };
 
     interceptFontMenu();
 
-    // Use the shared MutationObserver instead of a separate body+subtree observer.
-    // Re-entrant calls from our own DOM mutations are blocked by the isRunning guard above.
     sharedObserverCallbacks.current.add(interceptFontMenu);
 
     return () => {
       sharedObserverCallbacks.current.delete(interceptFontMenu);
     };
-  }, [loading, activeCustomFont]);
+  }, [loading]);
 
   // Inject custom shortcuts list into Excalidraw's built-in Help dialog modal
   useEffect(() => {
@@ -1976,6 +1813,47 @@ export default function App() {
           files: excalidrawAPI.getFiles() || {}
         });
         
+        // Inject font styles so fonts render correctly when SVG is viewed externally
+        let defs = svg.querySelector("defs");
+        if (!defs) {
+          defs = svg.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "defs");
+          svg.insertBefore(defs, svg.firstChild);
+        }
+        const style = svg.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "style");
+        style.textContent = `
+          @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@400;700&family=Fira+Code:wght@400;700&family=Inter:wght@400;700&display=swap');
+          
+          @font-face {
+            font-family: "Excalifont";
+            src: local("Caveat"), local("Caveat Regular"), local("Caveat-Regular"), url("https://fonts.gstatic.com/s/caveat/v18/Wn15HCAcZNypGL4QLbtqzdZy.woff2") format("woff2");
+          }
+          @font-face {
+            font-family: "Comic Shanns";
+            src: local("Fira Code"), local("FiraCode-Regular"), local("Fira Code Regular"), url("https://fonts.gstatic.com/s/firacode/v22/u8ReQDpcRURCYcEpb2UPzRf6.woff2") format("woff2");
+          }
+          @font-face {
+            font-family: "Helvetica";
+            src: local("Inter"), local("Inter Regular"), local("Inter-Regular"), url("https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfAZJhjp-Ek-_eeAmJ.woff2") format("woff2");
+          }
+          @font-face {
+            font-family: "Helvetica Neue";
+            src: local("Inter"), local("Inter Regular"), local("Inter-Regular"), url("https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfAZJhjp-Ek-_eeAmJ.woff2") format("woff2");
+          }
+          @font-face {
+            font-family: "Arial";
+            src: local("Inter"), local("Inter Regular"), local("Inter-Regular"), url("https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfAZJhjp-Ek-_eeAmJ.woff2") format("woff2");
+          }
+          @font-face {
+            font-family: "Nunito";
+            src: local("Inter"), local("Inter Regular"), local("Inter-Regular"), url("https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfAZJhjp-Ek-_eeAmJ.woff2") format("woff2");
+          }
+          @font-face {
+            font-family: "Lilita One";
+            src: local("Inter"), local("Inter Regular"), local("Inter-Regular"), url("https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfAZJhjp-Ek-_eeAmJ.woff2") format("woff2");
+          }
+        `;
+        defs.appendChild(style);
+
         const svgString = new XMLSerializer().serializeToString(svg);
         const blob = new Blob([svgString], { type: "image/svg+xml" });
         const url = URL.createObjectURL(blob);
@@ -2789,34 +2667,7 @@ export default function App() {
         <div className="settings-section" style={{ borderBottom: "1px solid var(--border-color)", paddingBottom: "calc(1.25rem * var(--ui-scale))", marginBottom: "calc(1.25rem * var(--ui-scale))" }}>
           <h4 className="section-title">Settings</h4>
           
-          {/* Default Font Selector */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "calc(0.25rem * var(--ui-scale))", padding: "calc(0.25rem * var(--ui-scale)) 0" }}>
-            <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))", color: "var(--text-secondary)" }}>Default Font</span>
-            <select 
-              value={activeCustomFont} 
-              onChange={(e) => setActiveCustomFont(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "calc(0.35rem * var(--ui-scale)) calc(0.5rem * var(--ui-scale))",
-                borderRadius: "calc(6px * var(--ui-scale))",
-                border: "1px solid var(--border-color)",
-                background: "var(--bg-card)",
-                color: "var(--text-primary)",
-                fontSize: "calc(0.8rem * var(--ui-scale))",
-                cursor: "pointer",
-                outline: "none"
-              }}
-            >
-              <option value="Excalifont">Excalifont (Default)</option>
-              <option value="Inter">Inter</option>
-              <option value="Roboto">Roboto</option>
-              <option value="Montserrat">Montserrat</option>
-              <option value="Playfair Display">Playfair Display</option>
-              <option value="Caveat">Caveat</option>
-              <option value="Pacifico">Pacifico</option>
-              <option value="Fira Code">Fira Code</option>
-            </select>
-          </div>
+
           
           {/* Brush Smoothing Slider */}
           <div style={{ display: "flex", flexDirection: "column", gap: "calc(0.25rem * var(--ui-scale))", marginTop: "calc(0.25rem * var(--ui-scale))", padding: "calc(0.25rem * var(--ui-scale)) 0" }}>
