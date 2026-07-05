@@ -50,36 +50,13 @@ jobs:
           ls -la ./dist
 
       - name: Setup Pages
-        uses: actions/configure-pages@v4
+        uses: actions/configure-pages@v5
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: './dist'
 
-      - name: Wait for Pages queue to clear (or cancel stuck deployment)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          REPO="$GITHUB_REPOSITORY"
-          API="https://api.github.com/repos/$REPO/pages/deployment"
-          header_auth="Authorization: Bearer $GITHUB_TOKEN"
-          header_accept="Accept: application/vnd.github+json"
-          max_tries=30
-          sleep_sec=20
-          for i in $(seq 1 $max_tries); do
-            status=$(curl -s -H "$header_auth" -H "$header_accept" "$API" | jq -r '.status // "none"')
-            echo "Attempt $i: Pages deployment status = $status"
-            if [ "$status" != "deployment_queued" ] && [ "$status" != "building" ]; then
-              echo "No queued/building Pages deployment. Proceeding."
-              exit 0
-            fi
-            sleep $sleep_sec
-          done
-          echo "Timed out waiting for Pages deployment to clear. Attempting cancel."
-          curl -s -X POST -H "$header_auth" -H "$header_accept" "$API/cancel" || true
-          exit 1
-
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
