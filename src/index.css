@@ -1233,3 +1233,10 @@ body.hide-toasts .excalidraw-container [class*="Toast" i],
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* Responsive adjustments: hide element properties settings checkbox in mobile view */
+@media (max-width: 768px) {
+  .settings-row.properties-panel-row {
+    display: none !important;
+  }
+}

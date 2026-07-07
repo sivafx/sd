@@ -334,6 +334,7 @@ export default function App() {
   const fileHandlesRef = useRef({});
   const autoSaveTimeoutRef = useRef(null);
   const lastDiskSaveTimeRef = useRef(0);
+  const [filePermissionState, setFilePermissionState] = useState("granted"); // "granted" | "prompt" | "denied"
 
   const [showNotifications, setShowNotifications] = useState(() => {
     const saved = localStorage.getItem("shivadraw_show_notifications");
@@ -515,6 +516,15 @@ export default function App() {
         } catch (e) {
           console.error("Clean up of old settings keys failed:", e);
         }
+      }
+
+      // Populate fileHandlesRef from loaded docs
+      if (Array.isArray(loadedDocs)) {
+        loadedDocs.forEach(doc => {
+          if (doc.fileHandle) {
+            fileHandlesRef.current[doc.id] = doc.fileHandle;
+          }
+        });
       }
 
       // Update React states and initial refs
@@ -1149,16 +1159,18 @@ export default function App() {
         files: activeDoc.files || {}
       };
       
-      // Update filename and auto-save enabled state for the newly activated document from our file handles map
-      const handle = fileHandlesRef.current[activeDocId];
+      // Update filename and auto-save enabled state for the newly activated document from our file handles map or document object
+      const handle = fileHandlesRef.current[activeDocId] || activeDoc.fileHandle;
       if (handle) {
+        fileHandlesRef.current[activeDocId] = handle;
         setAutoSaveFileName(handle.name);
-        setAutoSaveEnabled(true);
-        autoSaveEnabledRef.current = true;
+        // Check permission state asynchronously
+        checkFilePermission(handle);
       } else {
         setAutoSaveFileName("");
         setAutoSaveEnabled(false);
         autoSaveEnabledRef.current = false;
+        setFilePermissionState("granted"); // default back to granted
       }
 
       // Delay disabling the switching flag to absorb the subsequent onChange triggers
@@ -1656,6 +1668,13 @@ export default function App() {
         const activeHandle = fileHandlesRef.current[currentActiveId];
         if (autoSaveEnabledRef.current && activeHandle) {
           const docData = updatedDocs[docIndex];
+          
+          // SAFETY GUARD: Do not auto-save if elements are empty, to prevent overwriting with blank canvas during/after crash
+          if (!docData.elements || docData.elements.length === 0) {
+            console.log("Auto-save skipped: Canvas is empty.");
+            return updatedDocs;
+          }
+
           if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
           
           const timeSinceLastSave = Date.now() - lastDiskSaveTimeRef.current;
@@ -1663,6 +1682,15 @@ export default function App() {
 
           autoSaveTimeoutRef.current = setTimeout(async () => {
             try {
+              // Verify permission before attempting write (non-interactive check)
+              const currentPerm = await activeHandle.queryPermission({ mode: "readwrite" });
+              if (currentPerm !== "granted") {
+                console.warn("Auto-save skipped: File write permission not granted.");
+                setFilePermissionState(currentPerm);
+                setAutoSaveDiskStatus("error");
+                return;
+              }
+
               setAutoSaveDiskStatus("saving");
               const dataStr = JSON.stringify({
                 version: 1,
@@ -2237,6 +2265,44 @@ export default function App() {
     showToast("Drawing exported as .shiva file 💾");
   }
 
+  // Query permission of a file handle
+  const checkFilePermission = useCallback(async (handle) => {
+    if (!handle) return "prompt";
+    try {
+      const status = await handle.queryPermission({ mode: "readwrite" });
+      setFilePermissionState(status);
+      return status;
+    } catch (err) {
+      console.error("Error querying file permission:", err);
+      setFilePermissionState("prompt");
+      return "prompt";
+    }
+  }, []);
+
+  // Request permission of a file handle
+  const requestFilePermission = useCallback(async (handle) => {
+    if (!handle) return false;
+    try {
+      const status = await handle.requestPermission({ mode: "readwrite" });
+      setFilePermissionState(status);
+      if (status === "granted") {
+        autoSaveEnabledRef.current = true;
+        setAutoSaveEnabled(true);
+        showToast("Connected to file successfully! 💾");
+        // Save immediately to sync changes
+        saveNowToDisk();
+        return true;
+      } else {
+        showToast("Permission to write file denied", "error");
+        return false;
+      }
+    } catch (err) {
+      console.error("Error requesting file permission:", err);
+      showToast("Failed to request file permission", "error");
+      return false;
+    }
+  }, [showToast]);
+
   // ─── Auto-Save to Disk (File System Access API) ────────────────────────────
 
   // Pick a file location on disk and store the handle for subsequent auto-saves
@@ -2270,7 +2336,15 @@ export default function App() {
       });
       // Store in our board-specific map
       fileHandlesRef.current[activeDocIdRef.current] = handle;
+      // Also update the document object to persist the handle in IndexedDB
+      setDocuments(prevDocs => prevDocs.map(doc => {
+        if (doc.id === activeDocIdRef.current) {
+          return { ...doc, fileHandle: handle, updatedAt: Date.now() };
+        }
+        return doc;
+      }));
       setAutoSaveFileName(handle.name);
+      setFilePermissionState("granted");
       showToast(`Linked to disk file → ${handle.name} 💾`, "success");
       return handle;
     } catch (err) {
@@ -2286,9 +2360,9 @@ export default function App() {
   async function handleToggleAutoSave(checked) {
     autoSaveEnabledRef.current = checked;
     if (checked) {
-      const currentHandle = fileHandlesRef.current[activeDocId];
+      const activeDoc = documents.find(d => d.id === activeDocId);
+      let currentHandle = fileHandlesRef.current[activeDocId] || activeDoc?.fileHandle;
       if (!currentHandle) {
-        const activeDoc = documents.find(d => d.id === activeDocId);
         const handle = await pickSaveFile(activeDoc?.title || "drawing");
         if (!handle) {
           // User cancelled the picker — keep auto-save off
@@ -2297,6 +2371,21 @@ export default function App() {
           return;
         }
       } else {
+        fileHandlesRef.current[activeDocId] = currentHandle;
+        // Verify permission (since this is triggered by user click, request permission)
+        const permStatus = await currentHandle.queryPermission({ mode: "readwrite" });
+        if (permStatus !== "granted") {
+          const reqStatus = await currentHandle.requestPermission({ mode: "readwrite" });
+          setFilePermissionState(reqStatus);
+          if (reqStatus !== "granted") {
+            autoSaveEnabledRef.current = false;
+            setAutoSaveEnabled(false);
+            showToast("Write permission required to enable Auto-save", "error");
+            return;
+          }
+        } else {
+          setFilePermissionState("granted");
+        }
         showToast(`Auto-save ON → ${currentHandle.name} 💾`);
       }
       setAutoSaveEnabled(true);
@@ -2311,12 +2400,26 @@ export default function App() {
   async function saveNowToDisk() {
     const activeDoc = documents.find(d => d.id === activeDocId);
     if (!activeDoc) return;
-    let handle = fileHandlesRef.current[activeDoc.id];
+    let handle = fileHandlesRef.current[activeDoc.id] || activeDoc.fileHandle;
     if (!handle) {
       handle = await pickSaveFile(activeDoc.title);
       if (!handle) return;
     }
     try {
+      fileHandlesRef.current[activeDoc.id] = handle;
+      // Verify and request permission (runs on user click)
+      const currentPerm = await handle.queryPermission({ mode: "readwrite" });
+      if (currentPerm !== "granted") {
+        const reqPerm = await handle.requestPermission({ mode: "readwrite" });
+        setFilePermissionState(reqPerm);
+        if (reqPerm !== "granted") {
+          showToast("Permission to write file denied", "error");
+          return;
+        }
+      } else {
+        setFilePermissionState("granted");
+      }
+
       setAutoSaveDiskStatus("saving");
       const dataStr = JSON.stringify({
         version: 1,
@@ -2477,11 +2580,13 @@ export default function App() {
             updatedAt: Date.now(),
             elements: clonedElements,
             appState: parsed.appState || {},
-            files: parsed.files || {}
+            files: parsed.files || {},
+            fileHandle: handle
           };
 
           // Store the writeable handle in our map
           fileHandlesRef.current[docId] = handle;
+          setFilePermissionState("granted");
 
           // Add to documents and activate it
           setDocuments(prevDocs => [newDoc, ...prevDocs]);
@@ -2801,7 +2906,7 @@ export default function App() {
             </button>
           </div>
 
-          <div className="settings-row" style={{ marginTop: "calc(0.5rem * var(--ui-scale))" }}>
+          <div className="settings-row properties-panel-row" style={{ marginTop: "calc(0.5rem * var(--ui-scale))" }}>
             <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))" }}>Show Properties Panel</span>
             <input 
               type="checkbox" 
@@ -2857,16 +2962,16 @@ export default function App() {
                 <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))", fontWeight: "600" }}>
                   💾 Auto-save to Disk
                 </span>
-                {autoSaveEnabled && autoSaveFileName && (
+                {autoSaveFileName && (
                   <span style={{
                     fontSize: "calc(0.65rem * var(--ui-scale))",
-                    color: autoSaveDiskStatus === "error" ? "#ef4444" : autoSaveDiskStatus === "saving" ? "#f59e0b" : "#10b981",
+                    color: filePermissionState !== "granted" ? "#f59e0b" : autoSaveDiskStatus === "error" ? "#ef4444" : autoSaveDiskStatus === "saving" ? "#f59e0b" : "#10b981",
                     maxWidth: "calc(130px * var(--ui-scale))",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap"
                   }} title={autoSaveFileName}>
-                    {autoSaveDiskStatus === "saving" ? "⏳ Saving..." : autoSaveDiskStatus === "saved" ? "✅ Saved!" : autoSaveDiskStatus === "error" ? "❌ Failed" : `→ ${autoSaveFileName}`}
+                    {filePermissionState !== "granted" ? "⚠️ Needs Permission" : autoSaveDiskStatus === "saving" ? "⏳ Saving..." : autoSaveDiskStatus === "saved" ? "✅ Saved!" : autoSaveDiskStatus === "error" ? "❌ Failed" : `→ ${autoSaveFileName}`}
                   </span>
                 )}
               </div>
@@ -2883,7 +2988,47 @@ export default function App() {
                 }}
               />
             </div>
-            {autoSaveEnabled && (
+            {autoSaveFileName && filePermissionState !== "granted" && (
+              <div style={{ 
+                marginTop: "calc(0.35rem * var(--ui-scale))",
+                padding: "calc(0.4rem * var(--ui-scale))",
+                borderRadius: "calc(4px * var(--ui-scale))",
+                background: "rgba(245, 158, 11, 0.1)",
+                border: "1px solid rgba(245, 158, 11, 0.3)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "calc(0.3rem * var(--ui-scale))"
+              }}>
+                <span style={{ fontSize: "calc(0.65rem * var(--ui-scale))", color: "#f59e0b", lineHeight: 1.2 }}>
+                  ⚠️ File connection paused. Authorize to resume auto-save.
+                </span>
+                <button
+                  className="btn-secondary"
+                  onClick={() => {
+                    const activeDoc = documents.find(d => d.id === activeDocId);
+                    const handle = fileHandlesRef.current[activeDocId] || activeDoc?.fileHandle;
+                    if (handle) {
+                      requestFilePermission(handle);
+                    }
+                  }}
+                  style={{ 
+                    fontSize: "calc(0.7rem * var(--ui-scale))",
+                    padding: "calc(0.25rem * var(--ui-scale)) calc(0.35rem * var(--ui-scale))",
+                    color: "#f59e0b",
+                    borderColor: "#f59e0b",
+                    background: "transparent",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "calc(0.2rem * var(--ui-scale))"
+                  }}
+                >
+                  🔗 Reconnect File
+                </button>
+              </div>
+            )}
+            {autoSaveEnabled && filePermissionState === "granted" && (
               <div style={{ display: "flex", gap: "calc(0.3rem * var(--ui-scale))", marginTop: "calc(0.35rem * var(--ui-scale))" }}>
                 <button
                   className="btn-secondary"
