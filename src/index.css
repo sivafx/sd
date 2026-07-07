@@ -474,6 +474,10 @@ body {
 }
 
 /* Background Presets */
+.canvas-wrapper.bg-preset-pure-white {
+  background-color: #ffffff !important;
+}
+
 .canvas-wrapper.bg-preset-solid-classic {
   background-color: var(--bg-primary) !important;
 }

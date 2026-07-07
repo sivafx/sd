@@ -4,7 +4,7 @@ import "@excalidraw/excalidraw/index.css";
 import { getItem, setItem, isIndexedDBSupported } from "./db";
 
 // Helper function to create basic Excalidraw elements
-const BACKGROUND_PRESETS = ["solid-classic", "blueprint", "dot-grid", "graph-grid", "schoolboard", "sunset", "aurora", "midnight"];
+const BACKGROUND_PRESETS = ["pure-white", "solid-classic", "blueprint", "dot-grid", "graph-grid", "schoolboard", "sunset", "aurora", "midnight"];
 const isPresetBackground = (style) => BACKGROUND_PRESETS.includes(style);
 
 // Presets that are dark — watermark should be light on these
@@ -216,8 +216,10 @@ const SEED_DOCS = [
     appState: {
       currentItemStrokeWidth: 1,
       currentItemRoughness: 0,
-      currentItemRoundness: "sharp"
-    }
+      currentItemRoundness: "sharp",
+      currentItemFontFamily: 2
+    },
+    backgroundStyle: "pure-white"
   }
 ];
 
@@ -535,12 +537,12 @@ export default function App() {
         if (activeDoc) {
           const savedAppState = activeDoc.appState && typeof activeDoc.appState === "object" ? activeDoc.appState : {};
           // If the doc has a custom/preset background, force transparent so our CSS wrapper shows through
-          const hasCustomBg = activeDoc.backgroundStyle && activeDoc.backgroundStyle !== "solid-classic";
+          const hasCustomBg = activeDoc.backgroundStyle && activeDoc.backgroundStyle !== "pure-white";
           initialDataRef.current = {
             elements: Array.isArray(activeDoc.elements) ? activeDoc.elements : [],
             appState: hasCustomBg
-              ? { ...savedAppState, viewBackgroundColor: "transparent" }
-              : savedAppState,
+              ? { currentItemFontFamily: 2, ...savedAppState, viewBackgroundColor: "transparent" }
+              : { currentItemFontFamily: 2, ...savedAppState },
             files: activeDoc.files && typeof activeDoc.files === "object" ? activeDoc.files : {}
           };
         }
@@ -1140,13 +1142,14 @@ export default function App() {
       }
 
       // Determine if this doc has a custom/preset background so we can force transparency
-      const hasCustomBg = activeDoc.backgroundStyle && activeDoc.backgroundStyle !== "solid-classic";
+      const hasCustomBg = activeDoc.backgroundStyle && activeDoc.backgroundStyle !== "pure-white";
       excalidrawAPI.updateScene({
         elements: activeDoc.elements || [],
         appState: {
           currentItemStrokeWidth: 1,
           currentItemRoughness: 0,
           currentItemRoundness: "sharp",
+          currentItemFontFamily: 2, // Default to Inter (Normal)
           ...(activeDoc.appState || {}),
           // Always override: if doc has a preset/custom bg, keep canvas transparent so our CSS shows through
           viewBackgroundColor: hasCustomBg ? "transparent" : (activeDoc.appState?.viewBackgroundColor || "transparent"),
@@ -1455,6 +1458,7 @@ export default function App() {
       currentItemStrokeWidth: 1,
       currentItemRoughness: 0,
       currentItemRoundness: "sharp",
+      currentItemFontFamily: 2, // Default to Inter (Normal)
       ...appState
     };
     const newDoc = {
@@ -1463,7 +1467,8 @@ export default function App() {
       updatedAt: Date.now(),
       elements: clonedElements,
       appState: mergedAppState,
-      files
+      files,
+      backgroundStyle: "pure-white" // Default to Pure White background
     };
 
     const updated = [newDoc, ...documents];
@@ -2872,7 +2877,7 @@ export default function App() {
           <div style={{ display: "flex", flexDirection: "column", gap: "calc(0.25rem * var(--ui-scale))", padding: "calc(0.25rem * var(--ui-scale)) 0" }}>
             <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))", color: "var(--text-secondary)" }}>Workspace Background</span>
             <select 
-              value={isPresetBackground(activeDoc?.backgroundStyle) ? activeDoc.backgroundStyle : "solid-classic"} 
+              value={isPresetBackground(activeDoc?.backgroundStyle) ? activeDoc.backgroundStyle : "pure-white"} 
               onChange={(e) => handleBackgroundChange(e.target.value)}
               style={{
                 width: "100%",
@@ -2886,6 +2891,7 @@ export default function App() {
                 outline: "none"
               }}
             >
+              <option value="pure-white">Pure White (Default)</option>
               <option value="solid-classic">Solid Classic</option>
               <option value="blueprint">Blueprint Grid</option>
               <option value="dot-grid">Dot Grid</option>
@@ -3205,7 +3211,7 @@ export default function App() {
 
       {/* Main Canvas Component Area */}
       <main 
-        className={`canvas-wrapper ${isPresetBackground(activeDoc?.backgroundStyle) ? `bg-preset-${activeDoc.backgroundStyle}` : "bg-preset-solid-classic"}`}
+        className={`canvas-wrapper ${isPresetBackground(activeDoc?.backgroundStyle) ? `bg-preset-${activeDoc.backgroundStyle}` : "bg-preset-pure-white"}`}
         style={{
           background: activeDoc?.backgroundStyle && !isPresetBackground(activeDoc.backgroundStyle) ? activeDoc.backgroundStyle : undefined
         }}
