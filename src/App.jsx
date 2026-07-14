@@ -480,6 +480,27 @@ export default function App() {
         }
       }
 
+      // Secondary recovery: fallback to localStorage backup if still no documents loaded
+      if (!loadedDocs || loadedDocs.length === 0) {
+        const backupStr = localStorage.getItem("shivadraw_docs_backup");
+        if (backupStr) {
+          try {
+            const parsed = JSON.parse(backupStr);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              loadedDocs = parsed;
+              console.log("Successfully recovered documents from localStorage backup!");
+              // Try restoring to IndexedDB to rebuild database
+              const isSupported = await isIndexedDBSupported();
+              if (isSupported) {
+                await setItem("shivadraw_docs", loadedDocs);
+              }
+            }
+          } catch (e) {
+            console.error("Failed to parse localStorage backup:", e);
+          }
+        }
+      }
+
       // Seed initial data if still no documents found
       if (!loadedDocs || loadedDocs.length === 0) {
         loadedDocs = SEED_DOCS;
@@ -538,12 +559,22 @@ export default function App() {
           const savedAppState = activeDoc.appState && typeof activeDoc.appState === "object" ? activeDoc.appState : {};
           // If the doc has a custom/preset background, force transparent so our CSS wrapper shows through
           const hasCustomBg = activeDoc.backgroundStyle && activeDoc.backgroundStyle !== "pure-white";
+          const initialElements = Array.isArray(activeDoc.elements) ? activeDoc.elements : [];
+          const initialFiles = activeDoc.files && typeof activeDoc.files === "object" ? activeDoc.files : {};
+
           initialDataRef.current = {
-            elements: Array.isArray(activeDoc.elements) ? activeDoc.elements : [],
+            elements: initialElements,
             appState: hasCustomBg
               ? { currentItemFontFamily: 2, ...savedAppState, viewBackgroundColor: "transparent" }
               : { currentItemFontFamily: 2, ...savedAppState },
-            files: activeDoc.files && typeof activeDoc.files === "object" ? activeDoc.files : {}
+            files: initialFiles
+          };
+
+          // Initialize latestDataRef on mount with the correct active document data
+          latestDataRef.current = {
+            elements: initialElements,
+            appState: savedAppState,
+            files: initialFiles
           };
         }
       }
@@ -562,14 +593,51 @@ export default function App() {
       setSaveStatus("saving");
       try {
         await setItem("shivadraw_docs", documents);
+        
+        // Save lightweight backup to localStorage
+        try {
+          const backupDocs = documents.map(doc => ({
+            id: doc.id,
+            title: doc.title,
+            updatedAt: doc.updatedAt,
+            elements: doc.elements,
+            appState: doc.appState,
+            backgroundStyle: doc.backgroundStyle,
+            fileHandle: doc.fileHandle,
+            autoSaveEnabled: doc.autoSaveEnabled
+          }));
+          localStorage.setItem("shivadraw_docs_backup", JSON.stringify(backupDocs));
+        } catch (e) {
+          console.warn("Failed to save localStorage backup:", e);
+        }
+
         if (isCurrent) {
           setSaveStatus("saved");
         }
       } catch (err) {
         console.error("Failed to auto-save documents to IndexedDB:", err);
-        showToast("Failed to save changes! Storage issue.", "error");
-        if (isCurrent) {
-          setSaveStatus("saved");
+        // Fallback backup attempt if IndexedDB write fails
+        try {
+          const backupDocs = documents.map(doc => ({
+            id: doc.id,
+            title: doc.title,
+            updatedAt: doc.updatedAt,
+            elements: doc.elements,
+            appState: doc.appState,
+            backgroundStyle: doc.backgroundStyle,
+            fileHandle: doc.fileHandle,
+            autoSaveEnabled: doc.autoSaveEnabled
+          }));
+          localStorage.setItem("shivadraw_docs_backup", JSON.stringify(backupDocs));
+          if (isCurrent) {
+            setSaveStatus("saved");
+          }
+        } catch (e) {
+          console.error("LocalStorage fallback backup also failed:", e);
+          showToast("Failed to save changes! Storage issue.", "error");
+          if (isCurrent) {
+            setSaveStatus("saved");
+          }
         }
       }
     };
@@ -1122,13 +1190,41 @@ export default function App() {
   useEffect(() => {
     if (!excalidrawAPI || !activeDocId || loading) return;
 
-    if (isInitialMountRef.current) {
-      isInitialMountRef.current = false;
-      return;
-    }
-
     const activeDoc = latestDocumentsRef.current.find((d) => d.id === activeDocId);
     if (activeDoc) {
+      // Setup file handle and auto-save state (runs on both initial mount and document switch)
+      const handle = fileHandlesRef.current[activeDocId] || activeDoc.fileHandle;
+      if (handle) {
+        fileHandlesRef.current[activeDocId] = handle;
+        setAutoSaveFileName(handle.name);
+        
+        const wasAutoSaveEnabled = !!activeDoc.autoSaveEnabled;
+        checkFilePermission(handle).then((permStatus) => {
+          if (wasAutoSaveEnabled && permStatus === "granted") {
+            setAutoSaveEnabled(true);
+            autoSaveEnabledRef.current = true;
+          } else {
+            setAutoSaveEnabled(false);
+            autoSaveEnabledRef.current = false;
+          }
+        });
+      } else {
+        setAutoSaveFileName("");
+        setAutoSaveEnabled(false);
+        autoSaveEnabledRef.current = false;
+        setFilePermissionState("granted"); // default back to granted
+      }
+
+      // If it's the initial mount, skip updating the canvas scene (handled by initialData prop)
+      if (isInitialMountRef.current) {
+        isInitialMountRef.current = false;
+        // Still set isSwitchingRef to false after a delay so onChange can save
+        setTimeout(() => {
+          isSwitchingRef.current = false;
+        }, 150);
+        return;
+      }
+
       isSwitchingRef.current = true;
       
       // Load files into Excalidraw scene
@@ -1161,20 +1257,6 @@ export default function App() {
         appState: activeDoc.appState || {},
         files: activeDoc.files || {}
       };
-      
-      // Update filename and auto-save enabled state for the newly activated document from our file handles map or document object
-      const handle = fileHandlesRef.current[activeDocId] || activeDoc.fileHandle;
-      if (handle) {
-        fileHandlesRef.current[activeDocId] = handle;
-        setAutoSaveFileName(handle.name);
-        // Check permission state asynchronously
-        checkFilePermission(handle);
-      } else {
-        setAutoSaveFileName("");
-        setAutoSaveEnabled(false);
-        autoSaveEnabledRef.current = false;
-        setFilePermissionState("granted"); // default back to granted
-      }
 
       // Delay disabling the switching flag to absorb the subsequent onChange triggers
       setTimeout(() => {
@@ -2344,7 +2426,7 @@ export default function App() {
       // Also update the document object to persist the handle in IndexedDB
       setDocuments(prevDocs => prevDocs.map(doc => {
         if (doc.id === activeDocIdRef.current) {
-          return { ...doc, fileHandle: handle, updatedAt: Date.now() };
+          return { ...doc, fileHandle: handle, autoSaveEnabled: true, updatedAt: Date.now() };
         }
         return doc;
       }));
@@ -2391,10 +2473,26 @@ export default function App() {
         } else {
           setFilePermissionState("granted");
         }
+
+        // Persist autoSaveEnabled = true in the document object
+        setDocuments(prevDocs => prevDocs.map(doc => {
+          if (doc.id === activeDocIdRef.current) {
+            return { ...doc, autoSaveEnabled: true, updatedAt: Date.now() };
+          }
+          return doc;
+        }));
+
         showToast(`Auto-save ON → ${currentHandle.name} 💾`);
       }
       setAutoSaveEnabled(true);
     } else {
+      // Persist autoSaveEnabled = false in the document object
+      setDocuments(prevDocs => prevDocs.map(doc => {
+        if (doc.id === activeDocIdRef.current) {
+          return { ...doc, autoSaveEnabled: false, updatedAt: Date.now() };
+        }
+        return doc;
+      }));
       setAutoSaveEnabled(false);
       setAutoSaveDiskStatus("idle");
       showToast("Auto-save to disk disabled", "info");
@@ -2438,6 +2536,14 @@ export default function App() {
       await writable.close();
       lastDiskSaveTimeRef.current = Date.now();
       setAutoSaveDiskStatus("saved");
+      
+      // Update document object in state with fileHandle and autoSaveEnabled
+      setDocuments(prevDocs => prevDocs.map(doc => {
+        if (doc.id === activeDoc.id) {
+          return { ...doc, fileHandle: handle, autoSaveEnabled: true, updatedAt: Date.now() };
+        }
+        return doc;
+      }));
       
       // Automatically enable Auto-Save option on successful save
       autoSaveEnabledRef.current = true;
@@ -2586,12 +2692,20 @@ export default function App() {
             elements: clonedElements,
             appState: parsed.appState || {},
             files: parsed.files || {},
-            fileHandle: handle
+            fileHandle: handle,
+            autoSaveEnabled: true // Enable auto-save on newly imported disk file
           };
 
           // Store the writeable handle in our map
           fileHandlesRef.current[docId] = handle;
           setFilePermissionState("granted");
+
+          // Initialize latestDataRef with correct imported drawing data
+          latestDataRef.current = {
+            elements: clonedElements,
+            appState: parsed.appState || {},
+            files: parsed.files || {}
+          };
 
           // Add to documents and activate it
           setDocuments(prevDocs => [newDoc, ...prevDocs]);
@@ -2630,18 +2744,41 @@ export default function App() {
         saveTimeoutRef.current = null;
       }
 
+      // If we are currently switching documents or loading, do not save!
+      if (isSwitchingRef.current) {
+        console.log("Emergency save skipped: App is in switching/loading state.");
+        return;
+      }
+
       // Build updated documents array with the latest canvas data
       setDocuments(prevDocs => {
         const docIndex = prevDocs.findIndex(d => d.id === currentId);
         if (docIndex === -1) return prevDocs;
 
         const updatedDocs = [...prevDocs];
-        const existingFiles = updatedDocs[docIndex].files || {};
+        const activeDocInDB = updatedDocs[docIndex];
+        const existingFiles = activeDocInDB.files || {};
         const newFiles = latestDataRef.current.files || {};
+        
+        // Safeguard to prevent overwriting elements with empty array during initialization/race condition
+        const hasExistingElements = activeDocInDB.elements && activeDocInDB.elements.length > 0;
+        const incomingElements = latestDataRef.current.elements;
+        const isIncomingEmpty = !incomingElements || incomingElements.length === 0;
+
+        let finalElements = activeDocInDB.elements;
+        let finalAppState = activeDocInDB.appState;
+        
+        if (!isIncomingEmpty || !hasExistingElements) {
+          finalElements = incomingElements;
+          finalAppState = latestDataRef.current.appState || activeDocInDB.appState;
+        } else {
+          console.warn("Emergency save prevented: would have overwritten elements with empty array.");
+        }
+
         updatedDocs[docIndex] = {
           ...updatedDocs[docIndex],
-          elements: latestDataRef.current.elements || updatedDocs[docIndex].elements,
-          appState: latestDataRef.current.appState || updatedDocs[docIndex].appState,
+          elements: finalElements,
+          appState: finalAppState,
           files: { ...existingFiles, ...newFiles },
           updatedAt: Date.now()
         };
@@ -2649,11 +2786,24 @@ export default function App() {
         // Fire-and-forget IndexedDB write immediately (synchronous-as-possible)
         setItem("shivadraw_docs", updatedDocs).catch(err => {
           console.error("Emergency save to IndexedDB failed:", err);
-          // Fallback: try localStorage
-          try {
-            localStorage.setItem("shivadraw_docs", JSON.stringify(updatedDocs));
-          } catch (e) {}
         });
+
+        // Save backup to localStorage
+        try {
+          const backupDocs = updatedDocs.map(doc => ({
+            id: doc.id,
+            title: doc.title,
+            updatedAt: doc.updatedAt,
+            elements: doc.elements,
+            appState: doc.appState,
+            backgroundStyle: doc.backgroundStyle,
+            fileHandle: doc.fileHandle,
+            autoSaveEnabled: doc.autoSaveEnabled
+          }));
+          localStorage.setItem("shivadraw_docs_backup", JSON.stringify(backupDocs));
+        } catch (e) {
+          console.warn("Emergency save failed to write backup to localStorage:", e);
+        }
 
         return updatedDocs;
       });
