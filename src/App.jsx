@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Excalidraw, MainMenu, exportToBlob, exportToSvg } from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
-import { getItem, setItem, isIndexedDBSupported } from "./db";
+import { getItem, setItem, isIndexedDBSupported, getItemOPFS, setItemOPFS } from "./db";
 
 // Helper function to create basic Excalidraw elements
 const BACKGROUND_PRESETS = ["pure-white", "solid-classic", "blueprint", "dot-grid", "graph-grid", "schoolboard", "sunset", "aurora", "midnight"];
@@ -203,6 +203,42 @@ const cloneElements = (elements) => {
 
     return updated;
   });
+};
+
+const saveLocalStorageBackup = (docs) => {
+  try {
+    // Attempt 1: Save full documents including images (files)
+    const fullBackup = docs.map(doc => ({
+      id: doc.id,
+      title: doc.title,
+      updatedAt: doc.updatedAt,
+      elements: doc.elements,
+      appState: doc.appState,
+      backgroundStyle: doc.backgroundStyle,
+      fileHandle: doc.fileHandle,
+      autoSaveEnabled: doc.autoSaveEnabled,
+      files: doc.files
+    }));
+    localStorage.setItem("shivadraw_docs_backup", JSON.stringify(fullBackup));
+  } catch (e) {
+    // Attempt 2: Fallback to lightweight backup (no images) if quota exceeded
+    try {
+      const lightweightBackup = docs.map(doc => ({
+        id: doc.id,
+        title: doc.title,
+        updatedAt: doc.updatedAt,
+        elements: doc.elements,
+        appState: doc.appState,
+        backgroundStyle: doc.backgroundStyle,
+        fileHandle: doc.fileHandle,
+        autoSaveEnabled: doc.autoSaveEnabled
+      }));
+      localStorage.setItem("shivadraw_docs_backup", JSON.stringify(lightweightBackup));
+      console.warn("LocalStorage backup fallback: images stripped due to quota limit.");
+    } catch (e2) {
+      console.warn("Failed to save even the lightweight localStorage backup:", e2);
+    }
+  }
 };
 
 
@@ -480,6 +516,24 @@ export default function App() {
         }
       }
 
+      // OPFS Fallback: Try loading from OPFS if IndexedDB fails or is empty
+      if (!loadedDocs || loadedDocs.length === 0) {
+        try {
+          const opfsDocs = await getItemOPFS("shivadraw_docs_opfs");
+          if (opfsDocs && Array.isArray(opfsDocs) && opfsDocs.length > 0) {
+            loadedDocs = opfsDocs;
+            console.log("Successfully recovered documents from OPFS backup!");
+            // Try restoring to IndexedDB to rebuild database
+            const isSupported = await isIndexedDBSupported();
+            if (isSupported) {
+              await setItem("shivadraw_docs", loadedDocs);
+            }
+          }
+        } catch (e) {
+          console.error("Failed to load from OPFS:", e);
+        }
+      }
+
       // Secondary recovery: fallback to localStorage backup if still no documents loaded
       if (!loadedDocs || loadedDocs.length === 0) {
         const backupStr = localStorage.getItem("shivadraw_docs_backup");
@@ -595,21 +649,12 @@ export default function App() {
         await setItem("shivadraw_docs", documents);
         
         // Save lightweight backup to localStorage
-        try {
-          const backupDocs = documents.map(doc => ({
-            id: doc.id,
-            title: doc.title,
-            updatedAt: doc.updatedAt,
-            elements: doc.elements,
-            appState: doc.appState,
-            backgroundStyle: doc.backgroundStyle,
-            fileHandle: doc.fileHandle,
-            autoSaveEnabled: doc.autoSaveEnabled
-          }));
-          localStorage.setItem("shivadraw_docs_backup", JSON.stringify(backupDocs));
-        } catch (e) {
-          console.warn("Failed to save localStorage backup:", e);
-        }
+        saveLocalStorageBackup(documents);
+        
+        // Save full backup to OPFS (background, non-blocking)
+        setItemOPFS("shivadraw_docs_opfs", documents).catch(e => {
+          console.error("Failed to save OPFS backup:", e);
+        });
 
         if (isCurrent) {
           setSaveStatus("saved");
@@ -617,23 +662,16 @@ export default function App() {
       } catch (err) {
         console.error("Failed to auto-save documents to IndexedDB:", err);
         // Fallback backup attempt if IndexedDB write fails
-        try {
-          const backupDocs = documents.map(doc => ({
-            id: doc.id,
-            title: doc.title,
-            updatedAt: doc.updatedAt,
-            elements: doc.elements,
-            appState: doc.appState,
-            backgroundStyle: doc.backgroundStyle,
-            fileHandle: doc.fileHandle,
-            autoSaveEnabled: doc.autoSaveEnabled
-          }));
-          localStorage.setItem("shivadraw_docs_backup", JSON.stringify(backupDocs));
-          if (isCurrent) {
-            setSaveStatus("saved");
-          }
-        } catch (e) {
-          console.error("LocalStorage fallback backup also failed:", e);
+        saveLocalStorageBackup(documents);
+        
+        // Save full backup to OPFS (background, non-blocking)
+        setItemOPFS("shivadraw_docs_opfs", documents).catch(e => {
+          console.error("Failed to save OPFS backup:", e);
+        });
+
+        if (isCurrent) {
+          setSaveStatus("saved");
+        }
           showToast("Failed to save changes! Storage issue.", "error");
           if (isCurrent) {
             setSaveStatus("saved");
@@ -2789,21 +2827,12 @@ export default function App() {
         });
 
         // Save backup to localStorage
-        try {
-          const backupDocs = updatedDocs.map(doc => ({
-            id: doc.id,
-            title: doc.title,
-            updatedAt: doc.updatedAt,
-            elements: doc.elements,
-            appState: doc.appState,
-            backgroundStyle: doc.backgroundStyle,
-            fileHandle: doc.fileHandle,
-            autoSaveEnabled: doc.autoSaveEnabled
-          }));
-          localStorage.setItem("shivadraw_docs_backup", JSON.stringify(backupDocs));
-        } catch (e) {
-          console.warn("Emergency save failed to write backup to localStorage:", e);
-        }
+        saveLocalStorageBackup(updatedDocs);
+        
+        // Trigger OPFS backup for visibilitychange emergencies (will likely abort on beforeunload)
+        setItemOPFS("shivadraw_docs_opfs", updatedDocs).catch(err => {
+          console.warn("Emergency save failed to write backup to OPFS:", err);
+        });
 
         return updatedDocs;
       });

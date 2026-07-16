@@ -175,3 +175,38 @@ export async function removeItem(key) {
     } catch (e) {}
   }
 }
+
+/**
+ * Stores an item in the Origin Private File System (OPFS).
+ * OPFS allows storing unlimited data directly to the user's hard drive without permission dialogs.
+ */
+export async function setItemOPFS(key, value) {
+  try {
+    if (!navigator.storage || !navigator.storage.getDirectory) return;
+    const dir = await navigator.storage.getDirectory();
+    // Using a .json extension for clarity, but the key is fine
+    const fileHandle = await dir.getFileHandle(`${key}.json`, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(JSON.stringify(value));
+    await writable.close();
+  } catch (error) {
+    console.warn(`OPFS setItemOPFS error for key ${key}:`, error);
+  }
+}
+
+/**
+ * Retrieves an item from the Origin Private File System (OPFS).
+ */
+export async function getItemOPFS(key) {
+  try {
+    if (!navigator.storage || !navigator.storage.getDirectory) return null;
+    const dir = await navigator.storage.getDirectory();
+    const fileHandle = await dir.getFileHandle(`${key}.json`);
+    const file = await fileHandle.getFile();
+    const text = await file.text();
+    return JSON.parse(text);
+  } catch (error) {
+    // Usually means the file doesn't exist yet, which is normal
+    return null;
+  }
+}
