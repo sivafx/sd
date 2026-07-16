@@ -661,17 +661,19 @@ export default function App() {
         }
       } catch (err) {
         console.error("Failed to auto-save documents to IndexedDB:", err);
-        // Fallback backup attempt if IndexedDB write fails
-        saveLocalStorageBackup(documents);
-        
-        // Save full backup to OPFS (background, non-blocking)
-        setItemOPFS("shivadraw_docs_opfs", documents).catch(e => {
-          console.error("Failed to save OPFS backup:", e);
-        });
+        try {
+          // Fallback backup attempt if IndexedDB write fails
+          saveLocalStorageBackup(documents);
+          
+          // Save full backup to OPFS (background, non-blocking)
+          setItemOPFS("shivadraw_docs_opfs", documents).catch(e => {
+            console.error("Failed to save OPFS backup:", e);
+          });
 
-        if (isCurrent) {
-          setSaveStatus("saved");
-        }
+          if (isCurrent) {
+            setSaveStatus("saved");
+          }
+        } catch (backupErr) {
           showToast("Failed to save changes! Storage issue.", "error");
           if (isCurrent) {
             setSaveStatus("saved");
