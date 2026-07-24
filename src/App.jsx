@@ -2328,10 +2328,24 @@ export default function App() {
 
   // "Save Now" to disk — also used by "Link to Disk File" button for un-linked boards
   async function saveNowToDisk() {
-    const activeDoc = documents.find(d => d.id === activeDocId);
+    const currentId = activeDocIdRef.current || activeDocId;
+    const activeDoc = latestDocumentsRef.current.find(d => d.id === currentId) || documents.find(d => d.id === currentId);
     if (!activeDoc) return;
 
-    let handle = fileHandlesRef.current[activeDoc.id];
+    // Snapshot latest elements/appState/files from ref so rapid edits are never missed
+    const latestElements = latestDataRef.current.elements;
+    const isLatestEmpty = !latestElements || latestElements.length === 0;
+    const hasExisting = activeDoc.elements && activeDoc.elements.length > 0;
+
+    const docToSave = {
+      ...activeDoc,
+      elements: (!isLatestEmpty || !hasExisting) ? latestElements : activeDoc.elements,
+      appState: (!isLatestEmpty || !hasExisting) ? (latestDataRef.current.appState || activeDoc.appState) : activeDoc.appState,
+      files: { ...(activeDoc.files || {}), ...(latestDataRef.current.files || {}) },
+      updatedAt: Date.now()
+    };
+
+    let handle = fileHandlesRef.current[currentId];
 
     if (!handle) {
       // No handle yet — prompt for save location (name + folder)
@@ -2342,12 +2356,12 @@ export default function App() {
       try {
         const now = new Date();
         const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
-        const cleanTitle = (activeDoc.title || "drawing").replace(/[\uD800-\uDFFF]./g, "").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_");
+        const cleanTitle = (docToSave.title || "drawing").replace(/[\uD800-\uDFFF]./g, "").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_");
         handle = await window.showSaveFilePicker({
           suggestedName: `${cleanTitle}-${dateStr}.shiva`,
           types: [{ description: "Shiva Canvas File", accept: { "application/json": [".shiva"] } }]
         });
-        fileHandlesRef.current[activeDoc.id] = handle;
+        fileHandlesRef.current[currentId] = handle;
         setAutoSaveFileName(handle.name);
       } catch (err) {
         if (err.name !== "AbortError") showToast("Could not create file", "error");
@@ -2356,7 +2370,7 @@ export default function App() {
     }
 
     try {
-      // Check/request write permission (user gesture is active since they clicked the button)
+      // Check/request write permission
       let perm = await handle.queryPermission({ mode: "readwrite" });
       if (perm !== "granted") {
         perm = await handle.requestPermission({ mode: "readwrite" });
@@ -2370,11 +2384,10 @@ export default function App() {
       }
 
       setAutoSaveDiskStatus("saving");
-      const success = await writeToDiskHandle(handle, activeDoc);
+      const success = await writeToDiskHandle(handle, docToSave);
       if (success) {
         lastDiskSaveTimeRef.current = Date.now();
-        // Store / update handle in registry
-        await storeFileHandle(activeDoc.id, handle, activeDoc.title, activeDoc.backgroundStyle);
+        await storeFileHandle(currentId, handle, docToSave.title, docToSave.backgroundStyle);
         setAutoSaveFileName(handle.name);
         setAutoSaveDiskStatus("saved");
         showToast(`Saved → ${handle.name} ✅`);
