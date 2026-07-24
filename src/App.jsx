@@ -353,7 +353,6 @@ export default function App() {
   const fileInputRef = useRef(null);
   const backupInputRef = useRef(null);
   const isInitialMountRef = useRef(true);
-  const autoSaveEnabledRef = useRef(false); // mirror of autoSaveEnabled for use inside callbacks
   const initialDataRef = useRef(null);
   // Ref to guard setSaveStatus — avoids a React re-render on every 60fps onChange call
   const saveStatusRef = useRef("saved");
@@ -1131,26 +1130,14 @@ export default function App() {
 
     const activeDoc = latestDocumentsRef.current.find((d) => d.id === activeDocId);
     if (activeDoc) {
-      // Setup file handle and auto-save state (runs on both initial mount and document switch)
+      // Setup file handle and permission state (runs on both initial mount and document switch)
       const handle = fileHandlesRef.current[activeDocId] || activeDoc.fileHandle;
       if (handle) {
         fileHandlesRef.current[activeDocId] = handle;
         setAutoSaveFileName(handle.name);
-        
-        const wasAutoSaveEnabled = !!activeDoc.autoSaveEnabled;
-        checkFilePermission(handle).then((permStatus) => {
-          if (wasAutoSaveEnabled && permStatus === "granted") {
-            setAutoSaveEnabled(true);
-            autoSaveEnabledRef.current = true;
-          } else {
-            setAutoSaveEnabled(false);
-            autoSaveEnabledRef.current = false;
-          }
-        });
+        checkFilePermission(handle).catch(() => {});
       } else {
         setAutoSaveFileName("");
-        setAutoSaveEnabled(false);
-        autoSaveEnabledRef.current = false;
         setFilePermissionState("granted"); // default back to granted
       }
 
@@ -2322,8 +2309,6 @@ export default function App() {
       const status = await handle.requestPermission({ mode: "readwrite" });
       setFilePermissionState(status);
       if (status === "granted") {
-        autoSaveEnabledRef.current = true;
-        setAutoSaveEnabled(true);
         showToast("Connected to file successfully! 💾");
         // Save immediately to sync changes
         saveNowToDisk();
