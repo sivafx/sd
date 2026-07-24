@@ -2606,6 +2606,54 @@ export default function App() {
     };
   }, []);
 
+  // Global Ctrl+S keyboard shortcut listener — re-authorizes file permission or saves/links to disk immediately
+  useEffect(() => {
+    const handleKeyDown = async (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const currentId = activeDocIdRef.current;
+        const handle = fileHandlesRef.current[currentId];
+
+        if (handle) {
+          try {
+            const status = await handle.queryPermission({ mode: "readwrite" });
+            if (status !== "granted") {
+              const newStatus = await handle.requestPermission({ mode: "readwrite" });
+              setFilePermissionState(newStatus);
+              if (newStatus === "granted") {
+                showToast("File connection re-authorized! ✅");
+                const parsed = await readFromDiskHandle(handle);
+                if (parsed && Array.isArray(parsed.elements) && excalidrawAPI) {
+                  excalidrawAPI.updateScene({ elements: parsed.elements });
+                  setDocuments(prev => prev.map(d => d.id === currentId
+                    ? { ...d, elements: parsed.elements, files: parsed.files || {}, appState: parsed.appState || {} }
+                    : d));
+                }
+                saveNowToDisk();
+              } else {
+                showToast("Permission denied by browser", "error");
+              }
+            } else {
+              saveNowToDisk();
+            }
+          } catch (err) {
+            console.error("Ctrl+S error:", err);
+            saveNowToDisk();
+          }
+        } else {
+          saveNowToDisk();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [excalidrawAPI, showToast]);
+
   // Intercept drag-and-drop of .shiva files globally to prevent Excalidraw from crashing with "invalid file"
   useEffect(() => {
     const handleDragOver = (e) => {
@@ -3199,6 +3247,85 @@ export default function App() {
 
 
         <div style={{ width: "100%", height: "100%", position: "relative" }}>
+          {/* Top Banner Prompt: Not saved to disk yet */}
+          {!loading && !fileHandlesRef.current[activeDocId] && (
+            <div 
+              style={{
+                position: "absolute",
+                top: "16px",
+                left: "50%",
+                transform: "translateX(-50%)",
+                zIndex: 100,
+                background: "#6366f1",
+                color: "#ffffff",
+                padding: "8px 18px",
+                borderRadius: "24px",
+                fontSize: "13px",
+                fontWeight: "500",
+                boxShadow: "0 4px 14px rgba(0,0,0,0.2)",
+                display: "flex",
+                alignItems: "center",
+                gap: "10px",
+                cursor: "pointer",
+                userSelect: "none",
+                transition: "transform 0.2s ease"
+              }}
+              onClick={saveNowToDisk}
+              title="Click to save this drawing to computer hard disk"
+            >
+              <span>📂 Drawing not saved to hard disk yet</span>
+              <span style={{ background: "#ffffff", color: "#6366f1", padding: "4px 12px", borderRadius: "12px", fontWeight: "bold", fontSize: "12px" }}>Save to Disk 💾</span>
+            </div>
+          )}
+
+          {/* Top Banner Prompt: Permission paused */}
+          {!loading && fileHandlesRef.current[activeDocId] && filePermissionState !== "granted" && (
+            <div 
+              style={{
+                position: "absolute",
+                top: "16px",
+                left: "50%",
+                transform: "translateX(-50%)",
+                zIndex: 100,
+                background: "#f59e0b",
+                color: "#ffffff",
+                padding: "8px 18px",
+                borderRadius: "24px",
+                fontSize: "13px",
+                fontWeight: "500",
+                boxShadow: "0 4px 14px rgba(0,0,0,0.2)",
+                display: "flex",
+                alignItems: "center",
+                gap: "10px",
+                cursor: "pointer",
+                userSelect: "none"
+              }}
+              onClick={async () => {
+                const handle = fileHandlesRef.current[activeDocId];
+                if (handle) {
+                  try {
+                    const status = await handle.requestPermission({ mode: "readwrite" });
+                    setFilePermissionState(status);
+                    if (status === "granted") {
+                      showToast("File access restored! ✅");
+                      const parsed = await readFromDiskHandle(handle);
+                      if (parsed && Array.isArray(parsed.elements) && excalidrawAPI) {
+                        excalidrawAPI.updateScene({ elements: parsed.elements });
+                        setDocuments(prev => prev.map(d => d.id === activeDocId
+                          ? { ...d, elements: parsed.elements, files: parsed.files || {}, appState: parsed.appState || {} }
+                          : d));
+                      }
+                    }
+                  } catch (err) {
+                    showToast("Could not request permission", "error");
+                  }
+                }
+              }}
+            >
+              <span>⚠️ Disk access paused for "{autoSaveFileName}"</span>
+              <span style={{ background: "#ffffff", color: "#d97706", padding: "4px 12px", borderRadius: "12px", fontWeight: "bold", fontSize: "12px" }}>Click to Reconnect 🔗</span>
+            </div>
+          )}
           {/* Excalidraw container */}
           {!loading && (
             <Excalidraw
