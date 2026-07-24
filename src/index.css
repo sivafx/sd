@@ -1233,7 +1233,6 @@ body.hide-toasts .excalidraw-container [class*="Toast" i],
 /* Excalidraw text editor typography polishes */
 .excalidraw .excalidraw__text-editor {
   line-height: 1.25 !important;
-  font-smoothing: antialiased;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
