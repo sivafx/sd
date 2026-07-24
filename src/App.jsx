@@ -1,7 +1,47 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Excalidraw, MainMenu, exportToBlob, exportToSvg } from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
-import { getItem, setItem, isIndexedDBSupported, getItemOPFS, setItemOPFS } from "./db";
+import { storeFileHandle, getAllFileHandles, removeFileHandle, updateHandleTitle, updateHandleBackground } from "./db";
+
+// ─── Disk helpers ────────────────────────────────────────────────────────────
+/**
+ * Write canvas data to a FileSystemFileHandle on the hard disk.
+ * Returns true on success, false on failure.
+ */
+async function writeToDiskHandle(handle, docData) {
+  try {
+    const dataStr = JSON.stringify({
+      version: 1,
+      title: docData.title,
+      elements: docData.elements || [],
+      appState: docData.appState || {},
+      files: docData.files || {},
+      backgroundStyle: docData.backgroundStyle || "pure-white"
+    }, null, 2);
+    const writable = await handle.createWritable();
+    await writable.write(dataStr);
+    await writable.close();
+    return true;
+  } catch (err) {
+    console.error("writeToDiskHandle error:", err);
+    return false;
+  }
+}
+
+/**
+ * Read and parse a .shiva file from a FileSystemFileHandle.
+ * Returns the parsed object or null.
+ */
+async function readFromDiskHandle(handle) {
+  try {
+    const file = await handle.getFile();
+    const text = await file.text();
+    return JSON.parse(text);
+  } catch (err) {
+    console.error("readFromDiskHandle error:", err);
+    return null;
+  }
+}
 
 // Helper function to create basic Excalidraw elements
 const BACKGROUND_PRESETS = ["pure-white", "solid-classic", "blueprint", "dot-grid", "graph-grid", "schoolboard", "sunset", "aurora", "midnight"];
@@ -205,41 +245,7 @@ const cloneElements = (elements) => {
   });
 };
 
-const saveLocalStorageBackup = (docs) => {
-  try {
-    // Attempt 1: Save full documents including images (files)
-    const fullBackup = docs.map(doc => ({
-      id: doc.id,
-      title: doc.title,
-      updatedAt: doc.updatedAt,
-      elements: doc.elements,
-      appState: doc.appState,
-      backgroundStyle: doc.backgroundStyle,
-      fileHandle: doc.fileHandle,
-      autoSaveEnabled: doc.autoSaveEnabled,
-      files: doc.files
-    }));
-    localStorage.setItem("shivadraw_docs_backup", JSON.stringify(fullBackup));
-  } catch (e) {
-    // Attempt 2: Fallback to lightweight backup (no images) if quota exceeded
-    try {
-      const lightweightBackup = docs.map(doc => ({
-        id: doc.id,
-        title: doc.title,
-        updatedAt: doc.updatedAt,
-        elements: doc.elements,
-        appState: doc.appState,
-        backgroundStyle: doc.backgroundStyle,
-        fileHandle: doc.fileHandle,
-        autoSaveEnabled: doc.autoSaveEnabled
-      }));
-      localStorage.setItem("shivadraw_docs_backup", JSON.stringify(lightweightBackup));
-      console.warn("LocalStorage backup fallback: images stripped due to quota limit.");
-    } catch (e2) {
-      console.warn("Failed to save even the lightweight localStorage backup:", e2);
-    }
-  }
-};
+// saveLocalStorageBackup removed — canvas data is stored only on hard disk files
 
 
 // Preloaded drawings for templates
@@ -365,10 +371,9 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState("saved"); // "saved" | "saving"
   const [searchQuery, setSearchQuery] = useState("");
   const [pdfDialogOpen, setPdfDialogOpen] = useState(false);
-  const [autoSaveEnabled, setAutoSaveEnabled] = useState(false);
-  const [autoSaveFileName, setAutoSaveFileName] = useState(""); // display name of the file handle
+  const [autoSaveFileName, setAutoSaveFileName] = useState(""); // display name of the linked disk file
   const [autoSaveDiskStatus, setAutoSaveDiskStatus] = useState("idle"); // "idle" | "saving" | "saved" | "error"
-  // Map of docId -> FileSystemFileHandle to support per-board file handles
+  // Map of docId -> FileSystemFileHandle — the primary storage for all canvas data
   const fileHandlesRef = useRef({});
   const autoSaveTimeoutRef = useRef(null);
   const lastDiskSaveTimeRef = useRef(0);
@@ -457,236 +462,130 @@ export default function App() {
     latestDocumentsRef.current = documents;
   }, [documents]);
 
-  // Load documents on mount
+  // ─── Load documents on mount (disk-first) ────────────────────────────────
+  // 1. Read stored file handle registry from IndexedDB (tiny records, no canvas data)
+  // 2. Request read permission for each handle
+  // 3. Read actual canvas data from the .shiva files on disk
+  // 4. Fall back to a blank canvas if no files found
   useEffect(() => {
     const loadData = async () => {
-      // Load theme synchronously from localStorage as it affects the initial render theme immediately
-      const savedTheme = localStorage.getItem("shivadraw_theme") || localStorage.getItem("exceldraw_theme") || "light";
+      const savedTheme = localStorage.getItem("shivadraw_theme") || "light";
       setTheme(savedTheme);
       document.documentElement.className = savedTheme === "dark" ? "theme-dark" : "theme-light";
 
-      let loadedDocs = null;
+      let loadedDocs = [];
       let initialActiveId = "";
 
-      try {
-        // Try getting from IndexedDB first
-        loadedDocs = await getItem("shivadraw_docs");
-      } catch (err) {
-        console.error("Error loading documents from IndexedDB:", err);
-      }
+      // ── Step 1: Check if File System Access API is available ──────────────
+      const hasFSAPI = typeof window !== "undefined" && !!window.showSaveFilePicker;
 
-      // Check if loadedDocs is a valid array
-      if (loadedDocs && !Array.isArray(loadedDocs)) {
-        console.warn("Loaded documents from IndexedDB is not an array:", loadedDocs);
-        loadedDocs = null;
-      }
+      if (hasFSAPI) {
+        // ── Step 2: Load all stored file handles from the registry ───────────
+        const registryEntries = await getAllFileHandles();
 
-      // Migration from localStorage if not in IndexedDB
-      if (!loadedDocs) {
-        const hasNewDocs = localStorage.getItem("shivadraw_docs") !== null;
-        const savedDocsString = localStorage.getItem("shivadraw_docs") || localStorage.getItem("exceldraw_docs");
-        
-        if (savedDocsString) {
-          try {
-            loadedDocs = JSON.parse(savedDocsString);
-            if (!Array.isArray(loadedDocs)) {
-              console.warn("Parsed migrated documents from localStorage is not an array:", loadedDocs);
-              loadedDocs = null;
-            }
-            
-            // Check if IndexedDB is available/supported before writing and cleaning up
-            if (loadedDocs) {
-              const isSupported = await isIndexedDBSupported();
-              if (isSupported) {
-                // Save to IndexedDB
-                await setItem("shivadraw_docs", loadedDocs);
-                
-                // Clean up localStorage to free up space (since it has a 5MB limit)
-                localStorage.removeItem("shivadraw_docs");
-                localStorage.removeItem("exceldraw_docs");
-                console.log("Successfully migrated localStorage documents to IndexedDB and cleared legacy keys.");
-              } else {
-                console.log("IndexedDB not supported or blocked. Keeping original documents in localStorage fallback.");
+        if (registryEntries.length > 0) {
+          // Sort by updatedAt descending (most recently edited first)
+          registryEntries.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+          for (const entry of registryEntries) {
+            try {
+              // Request read permission — browser may grant automatically if recently used
+              let permState = await entry.handle.queryPermission({ mode: "readwrite" });
+              if (permState !== "granted") {
+                // Try to request permission without a user gesture (may silently fail)
+                try {
+                  permState = await entry.handle.requestPermission({ mode: "readwrite" });
+                } catch (e) {
+                  // User gesture required — will be re-asked when user clicks the doc
+                  permState = "prompt";
+                }
               }
-            }
-          } catch (e) {
-            console.error("Migration from localStorage failed:", e);
-            loadedDocs = null;
-          }
-        }
-      }
 
-      // OPFS Fallback: Try loading from OPFS if IndexedDB fails or is empty
-      if (!loadedDocs || loadedDocs.length === 0) {
-        try {
-          const opfsDocs = await getItemOPFS("shivadraw_docs_opfs");
-          if (opfsDocs && Array.isArray(opfsDocs) && opfsDocs.length > 0) {
-            loadedDocs = opfsDocs;
-            console.log("Successfully recovered documents from OPFS backup!");
-            // Try restoring to IndexedDB to rebuild database
-            const isSupported = await isIndexedDBSupported();
-            if (isSupported) {
-              await setItem("shivadraw_docs", loadedDocs);
-            }
-          }
-        } catch (e) {
-          console.error("Failed to load from OPFS:", e);
-        }
-      }
-
-      // Secondary recovery: fallback to localStorage backup if still no documents loaded
-      if (!loadedDocs || loadedDocs.length === 0) {
-        const backupStr = localStorage.getItem("shivadraw_docs_backup");
-        if (backupStr) {
-          try {
-            const parsed = JSON.parse(backupStr);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              loadedDocs = parsed;
-              console.log("Successfully recovered documents from localStorage backup!");
-              // Try restoring to IndexedDB to rebuild database
-              const isSupported = await isIndexedDBSupported();
-              if (isSupported) {
-                await setItem("shivadraw_docs", loadedDocs);
+              if (permState === "granted") {
+                // Read canvas data from the disk file
+                const parsed = await readFromDiskHandle(entry.handle);
+                if (parsed && Array.isArray(parsed.elements)) {
+                  const doc = {
+                    id: entry.docId,
+                    title: parsed.title || entry.title || entry.handle.name.replace(/\.shiva$/, ""),
+                    updatedAt: entry.updatedAt || Date.now(),
+                    elements: parsed.elements,
+                    appState: parsed.appState || {},
+                    files: parsed.files || {},
+                    backgroundStyle: parsed.backgroundStyle || entry.backgroundStyle || "pure-white"
+                  };
+                  fileHandlesRef.current[entry.docId] = entry.handle;
+                  loadedDocs.push(doc);
+                  continue;
+                }
               }
+
+              // Permission not yet granted — create a placeholder doc (no canvas data yet)
+              // User will see a "Re-authorize" button when they click this doc
+              const placeholderDoc = {
+                id: entry.docId,
+                title: entry.title || entry.handle.name.replace(/\.shiva$/, ""),
+                updatedAt: entry.updatedAt || Date.now(),
+                elements: [],
+                appState: {},
+                files: {},
+                backgroundStyle: entry.backgroundStyle || "pure-white",
+                _needsPermission: true
+              };
+              fileHandlesRef.current[entry.docId] = entry.handle;
+              loadedDocs.push(placeholderDoc);
+            } catch (err) {
+              console.error("Failed to load doc from disk:", entry.docId, err);
             }
-          } catch (e) {
-            console.error("Failed to parse localStorage backup:", e);
           }
         }
-      }
-
-      // Seed initial data if still no documents found
-      if (!loadedDocs || loadedDocs.length === 0) {
-        loadedDocs = SEED_DOCS;
-        try {
-          await setItem("shivadraw_docs", SEED_DOCS);
-        } catch (err) {
-          console.error("Failed to seed documents in IndexedDB:", err);
-        }
-        showToast("Welcome to Shiva Canvas! 🎨", "success");
-      }
-
-      // Ensure loadedDocs is indeed an array here and sanitize documents
-      if (Array.isArray(loadedDocs)) {
-        loadedDocs = loadedDocs.filter(doc => doc && typeof doc === "object" && typeof doc.id === "string");
       } else {
-        loadedDocs = SEED_DOCS;
+        showToast("⚠️ Disk save requires Chrome or Edge browser", "error");
       }
 
-      // Resolve the active document ID
-      const savedActiveId = localStorage.getItem("shivadraw_active_id") || localStorage.getItem("exceldraw_active_id");
+      // ── Step 3: If no docs loaded, seed a blank board ─────────────────────
+      if (loadedDocs.length === 0) {
+        loadedDocs = [{ ...SEED_DOCS[0], id: `doc-${Date.now()}` }];
+        showToast("Welcome to Shiva Canvas! 🎨 — Create your first board.", "success");
+      }
+
+      // ── Step 4: Resolve active document ──────────────────────────────────
+      const savedActiveId = localStorage.getItem("shivadraw_active_id");
       if (savedActiveId && loadedDocs.some(d => d.id === savedActiveId)) {
         initialActiveId = savedActiveId;
-      } else if (loadedDocs.length > 0) {
+      } else {
         initialActiveId = loadedDocs[0].id;
       }
 
-      // Clean up legacy localStorage active_id/theme if migrating
-      if (localStorage.getItem("exceldraw_theme") !== null) {
-        try {
-          localStorage.setItem("shivadraw_theme", savedTheme);
-          if (initialActiveId) {
-            localStorage.setItem("shivadraw_active_id", initialActiveId);
-          }
-          localStorage.removeItem("exceldraw_theme");
-          localStorage.removeItem("exceldraw_active_id");
-        } catch (e) {
-          console.error("Clean up of old settings keys failed:", e);
-        }
-      }
-
-      // Populate fileHandlesRef from loaded docs
-      if (Array.isArray(loadedDocs)) {
-        loadedDocs.forEach(doc => {
-          if (doc.fileHandle) {
-            fileHandlesRef.current[doc.id] = doc.fileHandle;
-          }
-        });
-      }
-
-      // Update React states and initial refs
+      // ── Step 5: Set React state ───────────────────────────────────────────
       setDocuments(loadedDocs);
-      if (initialActiveId) {
-        setActiveDocId(initialActiveId);
-        const activeDoc = loadedDocs.find(d => d.id === initialActiveId);
-        if (activeDoc) {
-          const savedAppState = activeDoc.appState && typeof activeDoc.appState === "object" ? activeDoc.appState : {};
-          // If the doc has a custom/preset background, force transparent so our CSS wrapper shows through
-          const hasCustomBg = activeDoc.backgroundStyle && activeDoc.backgroundStyle !== "pure-white";
-          const initialElements = Array.isArray(activeDoc.elements) ? activeDoc.elements : [];
-          const initialFiles = activeDoc.files && typeof activeDoc.files === "object" ? activeDoc.files : {};
+      setActiveDocId(initialActiveId);
 
-          initialDataRef.current = {
-            elements: initialElements,
-            appState: hasCustomBg
-              ? { currentItemFontFamily: 2, ...savedAppState, viewBackgroundColor: "transparent" }
-              : { currentItemFontFamily: 2, ...savedAppState },
-            files: initialFiles
-          };
+      const activeDoc = loadedDocs.find(d => d.id === initialActiveId);
+      if (activeDoc && !activeDoc._needsPermission) {
+        const savedAppState = activeDoc.appState && typeof activeDoc.appState === "object" ? activeDoc.appState : {};
+        const hasCustomBg = activeDoc.backgroundStyle && activeDoc.backgroundStyle !== "pure-white";
+        const initialElements = Array.isArray(activeDoc.elements) ? activeDoc.elements : [];
+        const initialFiles = activeDoc.files && typeof activeDoc.files === "object" ? activeDoc.files : {};
 
-          // Initialize latestDataRef on mount with the correct active document data
-          latestDataRef.current = {
-            elements: initialElements,
-            appState: savedAppState,
-            files: initialFiles
-          };
-        }
+        initialDataRef.current = {
+          elements: initialElements,
+          appState: hasCustomBg
+            ? { currentItemFontFamily: 2, ...savedAppState, viewBackgroundColor: "transparent" }
+            : { currentItemFontFamily: 2, ...savedAppState },
+          files: initialFiles
+        };
+        latestDataRef.current = { elements: initialElements, appState: savedAppState, files: initialFiles };
       }
+
       setLoading(false);
     };
 
     loadData();
   }, []);
 
-  // Sync documents state changes to IndexedDB
-  useEffect(() => {
-    if (loading) return;
-
-    let isCurrent = true;
-    const saveDocs = async () => {
-      setSaveStatus("saving");
-      try {
-        await setItem("shivadraw_docs", documents);
-        
-        // Save lightweight backup to localStorage
-        saveLocalStorageBackup(documents);
-        
-        // Save full backup to OPFS (background, non-blocking)
-        setItemOPFS("shivadraw_docs_opfs", documents).catch(e => {
-          console.error("Failed to save OPFS backup:", e);
-        });
-
-        if (isCurrent) {
-          setSaveStatus("saved");
-        }
-      } catch (err) {
-        console.error("Failed to auto-save documents to IndexedDB:", err);
-        try {
-          // Fallback backup attempt if IndexedDB write fails
-          saveLocalStorageBackup(documents);
-          
-          // Save full backup to OPFS (background, non-blocking)
-          setItemOPFS("shivadraw_docs_opfs", documents).catch(e => {
-            console.error("Failed to save OPFS backup:", e);
-          });
-
-          if (isCurrent) {
-            setSaveStatus("saved");
-          }
-        } catch (backupErr) {
-          showToast("Failed to save changes! Storage issue.", "error");
-          if (isCurrent) {
-            setSaveStatus("saved");
-          }
-        }
-      }
-    };
-
-    saveDocs();
-    return () => {
-      isCurrent = false;
-    };
-  }, [documents, loading]);
+  // Canvas data is saved directly to disk files in handleCanvasChange.
+  // No IndexedDB / localStorage sync effect needed.
 
   // Load custom colors from colors.json if available
   useEffect(() => {
@@ -1573,30 +1472,60 @@ export default function App() {
     showToast(`Switched to ${nextTheme} theme`);
   };
 
-  // Create a new board
-  const createNewBoard = (title = "Untitled Board", elements = [], appState = {}, files = {}) => {
+  // Create a new board — immediately prompts for a disk save location
+  const createNewBoard = async (title = "Untitled Board", elements = [], appState = {}, files = {}) => {
     const clonedElements = cloneElements(elements);
     const mergedAppState = {
       currentItemStrokeWidth: 1,
       currentItemRoughness: 0,
       currentItemRoundness: "sharp",
-      currentItemFontFamily: 2, // Default to Inter (Normal)
+      currentItemFontFamily: 2,
       ...appState
     };
+    const newDocId = `doc-${Date.now()}`;
     const newDoc = {
-      id: `doc-${Date.now()}`,
+      id: newDocId,
       title,
       updatedAt: Date.now(),
       elements: clonedElements,
       appState: mergedAppState,
       files,
-      backgroundStyle: "pure-white" // Default to Pure White background
+      backgroundStyle: "pure-white"
     };
+
+    // Prompt for a disk save location (name + folder)
+    if (window.showSaveFilePicker) {
+      try {
+        const now = new Date();
+        const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+        const cleanTitle = title.replace(/[\uD800-\uDFFF]./g, "").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_");
+        const handle = await window.showSaveFilePicker({
+          suggestedName: `${cleanTitle}-${dateStr}.shiva`,
+          types: [{ description: "Shiva Canvas File", accept: { "application/json": [".shiva"] } }]
+        });
+        fileHandlesRef.current[newDocId] = handle;
+        // Write initial file to disk
+        await writeToDiskHandle(handle, newDoc);
+        // Store handle in registry
+        await storeFileHandle(newDocId, handle, title, "pure-white");
+        setAutoSaveFileName(handle.name);
+        setFilePermissionState("granted");
+      } catch (err) {
+        if (err.name === "AbortError") {
+          // User cancelled — still create the board in memory without a disk file
+          showToast(`"${title}" created (no disk file — link one with Ctrl+S)`, "info");
+        } else {
+          console.error("pickSaveFile on new board error:", err);
+        }
+      }
+    }
 
     const updated = [newDoc, ...documents];
     setDocuments(updated);
-    setActiveDocId(newDoc.id);
-    showToast(`"${title}" created`);
+    setActiveDocId(newDocId);
+    if (fileHandlesRef.current[newDocId]) {
+      showToast(`"${title}" created & linked to disk 💾`);
+    }
   };
 
   // Duplicate an existing board
@@ -1618,13 +1547,17 @@ export default function App() {
     showToast(`"${doc.title}" duplicated`);
   };
 
-  // Delete a board
+  // Delete a board — also removes from file handle registry
   const deleteBoard = (id, e) => {
     e.stopPropagation();
     const docToDelete = documents.find(d => d.id === id);
     if (!docToDelete) return;
 
     if (confirm(`Are you sure you want to delete "${docToDelete.title}"?`)) {
+      // Remove from file handle registry (does NOT delete the disk file)
+      removeFileHandle(id).catch(err => console.error("removeFileHandle error:", err));
+      delete fileHandlesRef.current[id];
+
       const filtered = documents.filter(d => d.id !== id);
       setDocuments(filtered);
 
@@ -1632,29 +1565,24 @@ export default function App() {
         if (filtered.length > 0) {
           setActiveDocId(filtered[0].id);
         } else {
-          // If no documents left, seed an empty board
           const fallbackDoc = {
             id: `doc-${Date.now()}`,
             title: "New Canvas 🎨",
             updatedAt: Date.now(),
             elements: [],
-            appState: {
-              currentItemStrokeWidth: 1,
-              currentItemRoughness: 0,
-              currentItemRoundness: "sharp"
-            }
+            appState: { currentItemStrokeWidth: 1, currentItemRoughness: 0, currentItemRoundness: "sharp" }
           };
           setDocuments([fallbackDoc]);
           setActiveDocId(fallbackDoc.id);
         }
       }
-      showToast("Board deleted", "error");
+      showToast("Board removed from app (disk file kept)", "error");
     }
   };
 
 
 
-  // Change workspace background style
+  // Change workspace background style — updates registry metadata
   const handleBackgroundChange = (newBgStyle) => {
     if (!activeDocId) return;
     
@@ -1666,23 +1594,19 @@ export default function App() {
     });
     setDocuments(updated);
     
-    // Force Excalidraw canvas transparency redraw
     if (excalidrawAPI) {
-      excalidrawAPI.updateScene({
-        appState: {
-          viewBackgroundColor: "transparent"
-        }
-      });
+      excalidrawAPI.updateScene({ appState: { viewBackgroundColor: "transparent" } });
     }
 
-    setItem("shivadraw_docs", updated).catch(err => {
-      console.error("Failed to save background style to IndexedDB:", err);
+    // Update registry metadata so background is remembered on next startup
+    updateHandleBackground(activeDocId, newBgStyle).catch(err => {
+      console.error("updateHandleBackground error:", err);
     });
     
     showToast("Workspace background updated");
   };
 
-  // Rename a board
+  // Rename a board — also updates the registry title
   const renameBoard = (id, newTitle) => {
     setEditingDocId(null);
     if (!newTitle.trim()) return;
@@ -1695,6 +1619,8 @@ export default function App() {
     });
 
     setDocuments(updated);
+    // Update registry so renamed title shows on next startup
+    updateHandleTitle(id, newTitle.trim()).catch(err => console.error("updateHandleTitle error:", err));
     showToast("Board renamed");
   };
 
@@ -1744,40 +1670,31 @@ export default function App() {
         return;
       }
 
-      // Snapshot active files BEFORE entering the setDocuments updater.
-      // React may call updater functions more than once in Concurrent Mode;
-      // calling the Excalidraw API inside an updater is unsafe.
       const snapshotActiveFiles = (excalidrawAPI && excalidrawAPI.getFiles) ? excalidrawAPI.getFiles() : {};
 
       setDocuments(prevDocs => {
         const docIndex = prevDocs.findIndex(d => d.id === currentActiveId);
-        if (docIndex === -1) {
-          return prevDocs;
-        }
+        if (docIndex === -1) return prevDocs;
 
         const updatedDocs = [...prevDocs];
         
-        // Merge image files to prevent losing previously pasted files
+        // Merge image files to prevent losing previously pasted images
         const existingFiles = updatedDocs[docIndex].files || {};
         const newFiles = latestDataRef.current.files || {};
         const mergedFiles = { ...existingFiles, ...newFiles };
 
-        // Garbage collect orphaned files (files not referenced by active elements and not in active session memory)
+        // Garbage-collect orphaned file blobs (not referenced by any active element)
         const referencedFileIds = new Set(
           latestDataRef.current.elements
             .filter(el => el.type === "image" && el.fileId)
             .map(el => el.fileId)
         );
-        const activeFiles = snapshotActiveFiles;
-        for (const fileId in activeFiles) {
+        for (const fileId in snapshotActiveFiles) {
           referencedFileIds.add(fileId);
         }
-
         const cleanedFiles = {};
         for (const fileId in mergedFiles) {
-          if (referencedFileIds.has(fileId)) {
-            cleanedFiles[fileId] = mergedFiles[fileId];
-          }
+          if (referencedFileIds.has(fileId)) cleanedFiles[fileId] = mergedFiles[fileId];
         }
 
         updatedDocs[docIndex] = {
@@ -1791,48 +1708,40 @@ export default function App() {
         saveStatusRef.current = "saved";
         setSaveStatus("saved");
 
-        // Auto-save to disk if enabled and a file handle is set for the active doc
+        // ── Disk auto-save (primary storage) ────────────────────────────────
         const activeHandle = fileHandlesRef.current[currentActiveId];
-        if (autoSaveEnabledRef.current && activeHandle) {
+        if (activeHandle) {
           const docData = updatedDocs[docIndex];
           
-          // SAFETY GUARD: Do not auto-save if elements are empty, to prevent overwriting with blank canvas during/after crash
+          // Safety: skip save if canvas is completely empty (guards against crash race)
           if (!docData.elements || docData.elements.length === 0) {
-            console.log("Auto-save skipped: Canvas is empty.");
             return updatedDocs;
           }
 
           if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
           
+          // 2-second throttle — fast enough to survive most power cuts
           const timeSinceLastSave = Date.now() - lastDiskSaveTimeRef.current;
-          const saveDelay = Math.max(500, 30000 - timeSinceLastSave); // 30 seconds throttle
+          const saveDelay = Math.max(300, 2000 - timeSinceLastSave);
 
           autoSaveTimeoutRef.current = setTimeout(async () => {
             try {
-              // Verify permission before attempting write (non-interactive check)
-              const currentPerm = await activeHandle.queryPermission({ mode: "readwrite" });
-              if (currentPerm !== "granted") {
-                console.warn("Auto-save skipped: File write permission not granted.");
-                setFilePermissionState(currentPerm);
+              const perm = await activeHandle.queryPermission({ mode: "readwrite" });
+              if (perm !== "granted") {
+                setFilePermissionState(perm);
                 setAutoSaveDiskStatus("error");
                 return;
               }
-
               setAutoSaveDiskStatus("saving");
-              const dataStr = JSON.stringify({
-                version: 1,
-                title: docData.title,
-                elements: docData.elements,
-                appState: docData.appState || {},
-                files: docData.files || {}
-              }, null, 2);
-              const writable = await activeHandle.createWritable();
-              await writable.write(dataStr);
-              await writable.close();
-              lastDiskSaveTimeRef.current = Date.now();
-              setAutoSaveDiskStatus("saved");
-              // Reset to idle after 2s
-              setTimeout(() => setAutoSaveDiskStatus("idle"), 2000);
+              const success = await writeToDiskHandle(activeHandle, docData);
+              if (success) {
+                lastDiskSaveTimeRef.current = Date.now();
+                setAutoSaveDiskStatus("saved");
+                setTimeout(() => setAutoSaveDiskStatus("idle"), 2000);
+              } else {
+                setAutoSaveDiskStatus("error");
+                setTimeout(() => setAutoSaveDiskStatus("idle"), 3000);
+              }
             } catch (err) {
               console.error("Auto-save to disk failed:", err);
               setAutoSaveDiskStatus("error");
@@ -1843,7 +1752,7 @@ export default function App() {
 
         return updatedDocs;
       });
-    }, 500); // 500ms debounce — more frequent saves to survive unexpected shutdowns
+    }, 500);
   }, [excalidrawAPI]);
 
   // Handle smoothing on pointer up (when drawing ends)
@@ -2430,132 +2339,44 @@ export default function App() {
     }
   }, [showToast]);
 
-  // ─── Auto-Save to Disk (File System Access API) ────────────────────────────
+  // (pickSaveFile and handleToggleAutoSave removed — saveNowToDisk handles everything)
 
-  // Pick a file location on disk and store the handle for subsequent auto-saves
-  async function pickSaveFile(docTitle = "") {
-    if (!window.showSaveFilePicker) {
-      showToast("Auto-save to disk requires Chrome or Edge browser", "error");
-      return null;
-    }
-    try {
-      const now = new Date();
-      const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const day = String(now.getDate()).padStart(2, '0');
-      const hours = String(now.getHours()).padStart(2, '0');
-      const minutes = String(now.getMinutes()).padStart(2, '0');
-      const dateString = `${year}-${month}-${day}-${hours}${minutes}`;
-
-      const cleanTitle = (docTitle || "drawing")
-        .replace(/[\uD800-\uDFFF]./g, "")
-        .replace(/[^\w\s-]/g, "")
-        .trim()
-        .replace(/\s+/g, "_");
-
-      const suggestedName = `${cleanTitle}-${dateString}.shiva`;
-      const handle = await window.showSaveFilePicker({
-        suggestedName,
-        types: [{
-          description: "Shiva Canvas File",
-          accept: { "application/json": [".shiva"] }
-        }]
-      });
-      // Store in our board-specific map
-      fileHandlesRef.current[activeDocIdRef.current] = handle;
-      // Also update the document object to persist the handle in IndexedDB
-      setDocuments(prevDocs => prevDocs.map(doc => {
-        if (doc.id === activeDocIdRef.current) {
-          return { ...doc, fileHandle: handle, autoSaveEnabled: true, updatedAt: Date.now() };
-        }
-        return doc;
-      }));
-      setAutoSaveFileName(handle.name);
-      setFilePermissionState("granted");
-      showToast(`Linked to disk file → ${handle.name} 💾`, "success");
-      return handle;
-    } catch (err) {
-      if (err.name !== "AbortError") {
-        console.error("File picker error:", err);
-        showToast("Could not open file picker", "error");
-      }
-      return null;
-    }
-  }
-
-  // Toggle auto-save: prompt for file location if turning on and no handle yet
-  async function handleToggleAutoSave(checked) {
-    autoSaveEnabledRef.current = checked;
-    if (checked) {
-      const activeDoc = documents.find(d => d.id === activeDocId);
-      let currentHandle = fileHandlesRef.current[activeDocId] || activeDoc?.fileHandle;
-      if (!currentHandle) {
-        const handle = await pickSaveFile(activeDoc?.title || "drawing");
-        if (!handle) {
-          // User cancelled the picker — keep auto-save off
-          autoSaveEnabledRef.current = false;
-          setAutoSaveEnabled(false);
-          return;
-        }
-      } else {
-        fileHandlesRef.current[activeDocId] = currentHandle;
-        // Verify permission (since this is triggered by user click, request permission)
-        const permStatus = await currentHandle.queryPermission({ mode: "readwrite" });
-        if (permStatus !== "granted") {
-          const reqStatus = await currentHandle.requestPermission({ mode: "readwrite" });
-          setFilePermissionState(reqStatus);
-          if (reqStatus !== "granted") {
-            autoSaveEnabledRef.current = false;
-            setAutoSaveEnabled(false);
-            showToast("Write permission required to enable Auto-save", "error");
-            return;
-          }
-        } else {
-          setFilePermissionState("granted");
-        }
-
-        // Persist autoSaveEnabled = true in the document object
-        setDocuments(prevDocs => prevDocs.map(doc => {
-          if (doc.id === activeDocIdRef.current) {
-            return { ...doc, autoSaveEnabled: true, updatedAt: Date.now() };
-          }
-          return doc;
-        }));
-
-        showToast(`Auto-save ON → ${currentHandle.name} 💾`);
-      }
-      setAutoSaveEnabled(true);
-    } else {
-      // Persist autoSaveEnabled = false in the document object
-      setDocuments(prevDocs => prevDocs.map(doc => {
-        if (doc.id === activeDocIdRef.current) {
-          return { ...doc, autoSaveEnabled: false, updatedAt: Date.now() };
-        }
-        return doc;
-      }));
-      setAutoSaveEnabled(false);
-      setAutoSaveDiskStatus("idle");
-      showToast("Auto-save to disk disabled", "info");
-    }
-  }
-
-  // Manual "Save Now" to disk — always writes immediately
+  // "Save Now" to disk — also used by "Link to Disk File" button for un-linked boards
   async function saveNowToDisk() {
     const activeDoc = documents.find(d => d.id === activeDocId);
     if (!activeDoc) return;
-    let handle = fileHandlesRef.current[activeDoc.id] || activeDoc.fileHandle;
+
+    let handle = fileHandlesRef.current[activeDoc.id];
+
     if (!handle) {
-      handle = await pickSaveFile(activeDoc.title);
-      if (!handle) return;
+      // No handle yet — prompt for save location (name + folder)
+      if (!window.showSaveFilePicker) {
+        showToast("Disk save requires Chrome or Edge", "error");
+        return;
+      }
+      try {
+        const now = new Date();
+        const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+        const cleanTitle = (activeDoc.title || "drawing").replace(/[\uD800-\uDFFF]./g, "").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_");
+        handle = await window.showSaveFilePicker({
+          suggestedName: `${cleanTitle}-${dateStr}.shiva`,
+          types: [{ description: "Shiva Canvas File", accept: { "application/json": [".shiva"] } }]
+        });
+        fileHandlesRef.current[activeDoc.id] = handle;
+        setAutoSaveFileName(handle.name);
+      } catch (err) {
+        if (err.name !== "AbortError") showToast("Could not create file", "error");
+        return;
+      }
     }
+
     try {
-      fileHandlesRef.current[activeDoc.id] = handle;
-      // Verify and request permission (runs on user click)
-      const currentPerm = await handle.queryPermission({ mode: "readwrite" });
-      if (currentPerm !== "granted") {
-        const reqPerm = await handle.requestPermission({ mode: "readwrite" });
-        setFilePermissionState(reqPerm);
-        if (reqPerm !== "granted") {
+      // Check/request write permission (user gesture is active since they clicked the button)
+      let perm = await handle.queryPermission({ mode: "readwrite" });
+      if (perm !== "granted") {
+        perm = await handle.requestPermission({ mode: "readwrite" });
+        setFilePermissionState(perm);
+        if (perm !== "granted") {
           showToast("Permission to write file denied", "error");
           return;
         }
@@ -2564,33 +2385,20 @@ export default function App() {
       }
 
       setAutoSaveDiskStatus("saving");
-      const dataStr = JSON.stringify({
-        version: 1,
-        title: activeDoc.title,
-        elements: activeDoc.elements,
-        appState: activeDoc.appState || {},
-        files: activeDoc.files || {}
-      }, null, 2);
-      const writable = await handle.createWritable();
-      await writable.write(dataStr);
-      await writable.close();
-      lastDiskSaveTimeRef.current = Date.now();
-      setAutoSaveDiskStatus("saved");
-      
-      // Update document object in state with fileHandle and autoSaveEnabled
-      setDocuments(prevDocs => prevDocs.map(doc => {
-        if (doc.id === activeDoc.id) {
-          return { ...doc, fileHandle: handle, autoSaveEnabled: true, updatedAt: Date.now() };
-        }
-        return doc;
-      }));
-      
-      // Automatically enable Auto-Save option on successful save
-      autoSaveEnabledRef.current = true;
-      setAutoSaveEnabled(true);
-
-      showToast(`Saved & Auto-save enabled → ${handle.name} ✅`);
-      setTimeout(() => setAutoSaveDiskStatus("idle"), 2000);
+      const success = await writeToDiskHandle(handle, activeDoc);
+      if (success) {
+        lastDiskSaveTimeRef.current = Date.now();
+        // Store / update handle in registry
+        await storeFileHandle(activeDoc.id, handle, activeDoc.title, activeDoc.backgroundStyle);
+        setAutoSaveFileName(handle.name);
+        setAutoSaveDiskStatus("saved");
+        showToast(`Saved → ${handle.name} ✅`);
+        setTimeout(() => setAutoSaveDiskStatus("idle"), 2000);
+      } else {
+        setAutoSaveDiskStatus("error");
+        showToast("Save to disk failed!", "error");
+        setTimeout(() => setAutoSaveDiskStatus("idle"), 3000);
+      }
     } catch (err) {
       console.error("Save to disk failed:", err);
       setAutoSaveDiskStatus("error");
@@ -2654,13 +2462,10 @@ export default function App() {
           }
 
           if (restoredCount > 0) {
-            await setItem("shivadraw_docs", mergedDocs);
             setDocuments(mergedDocs);
             const firstRestored = mergedDocs[mergedDocs.length - restoredCount];
-            if (firstRestored) {
-              setActiveDocId(firstRestored.id);
-            }
-            showToast(`Restored ${restoredCount} drawings from backup! 📂`, "success");
+            if (firstRestored) setActiveDocId(firstRestored.id);
+            showToast(`Restored ${restoredCount} drawings from backup! 📂 (link each to disk with 💾)`, "success");
           } else {
             showToast("No new drawings to restore", "info");
           }
@@ -2699,69 +2504,48 @@ export default function App() {
     e.target.value = "";
   };
 
-  // Open a file from disk using the File System Access API to capture writeable handle for Auto-Save
+  // Open a file from disk — stores handle in registry for auto-restore on next startup
   async function openFileFromDisk() {
     if (!window.showOpenFilePicker) {
-      // Fallback: trigger the hidden input click
-      if (fileInputRef.current) {
-        fileInputRef.current.click();
-      }
+      if (fileInputRef.current) fileInputRef.current.click();
       return;
     }
 
     try {
       const [handle] = await window.showOpenFilePicker({
-        types: [{
-          description: "Shiva Canvas File",
-          accept: { "application/json": [".shiva"] }
-        }],
+        types: [{ description: "Shiva Canvas File", accept: { "application/json": [".shiva"] } }],
         multiple: false
       });
 
-      const file = await handle.getFile();
-      const text = await file.text();
-      try {
-        const parsed = JSON.parse(text);
-        if (parsed && Array.isArray(parsed.elements)) {
-          const docId = `doc-${Date.now()}`;
-          const clonedElements = cloneElements(parsed.elements);
-          const newDoc = {
-            id: docId,
-            title: parsed.title || file.name.replace(/\.shiva$/, "").replace(/_/g, " "),
-            updatedAt: Date.now(),
-            elements: clonedElements,
-            appState: parsed.appState || {},
-            files: parsed.files || {},
-            fileHandle: handle,
-            autoSaveEnabled: true // Enable auto-save on newly imported disk file
-          };
+      const parsed = await readFromDiskHandle(handle);
+      if (parsed && Array.isArray(parsed.elements)) {
+        const docId = `doc-${Date.now()}`;
+        const clonedElements = cloneElements(parsed.elements);
+        const bgStyle = parsed.backgroundStyle || "pure-white";
+        const newDoc = {
+          id: docId,
+          title: parsed.title || handle.name.replace(/\.shiva$/, "").replace(/_/g, " "),
+          updatedAt: Date.now(),
+          elements: clonedElements,
+          appState: parsed.appState || {},
+          files: parsed.files || {},
+          backgroundStyle: bgStyle
+        };
 
-          // Store the writeable handle in our map
-          fileHandlesRef.current[docId] = handle;
-          setFilePermissionState("granted");
+        fileHandlesRef.current[docId] = handle;
+        setFilePermissionState("granted");
+        setAutoSaveFileName(handle.name);
 
-          // Initialize latestDataRef with correct imported drawing data
-          latestDataRef.current = {
-            elements: clonedElements,
-            appState: parsed.appState || {},
-            files: parsed.files || {}
-          };
+        // Store handle in registry so file auto-restores on next startup
+        await storeFileHandle(docId, handle, newDoc.title, bgStyle);
 
-          // Add to documents and activate it
-          setDocuments(prevDocs => [newDoc, ...prevDocs]);
-          setActiveDocId(docId);
+        latestDataRef.current = { elements: clonedElements, appState: parsed.appState || {}, files: parsed.files || {} };
+        setDocuments(prevDocs => [newDoc, ...prevDocs]);
+        setActiveDocId(docId);
 
-          // Automatically enable Auto-Save
-          autoSaveEnabledRef.current = true;
-          setAutoSaveEnabled(true);
-          setAutoSaveFileName(handle.name);
-
-          showToast(`"${file.name}" loaded & Auto-save enabled! 💾`);
-        } else {
-          showToast("Invalid file format: must contain elements array", "error");
-        }
-      } catch (err) {
-        showToast("Error parsing .shiva file content", "error");
+        showToast(`"${handle.name}" loaded & linked to disk! 💾`);
+      } else {
+        showToast("Invalid file format: must contain elements array", "error");
       }
     } catch (err) {
       if (err.name !== "AbortError") {
@@ -2771,84 +2555,61 @@ export default function App() {
     }
   }
 
-  // Emergency save: flush any pending debounced changes immediately to IndexedDB
-  // This runs on page unload (browser close/refresh) and on tab visibility change (power cut / switching away)
+  // Emergency save: flush any pending debounced changes to disk immediately
+  // Runs on page unload (browser close/refresh) and on tab visibility change (power cut)
   useEffect(() => {
     const emergencySave = async () => {
       const currentId = activeDocIdRef.current;
       if (!currentId || !latestDataRef.current) return;
 
-      // Flush the pending debounced save immediately
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
         saveTimeoutRef.current = null;
       }
 
-      // If we are currently switching documents or loading, do not save!
-      if (isSwitchingRef.current) {
-        console.log("Emergency save skipped: App is in switching/loading state.");
-        return;
-      }
+      if (isSwitchingRef.current) return;
 
-      // Build updated documents array with the latest canvas data
+      const activeHandle = fileHandlesRef.current[currentId];
+      if (!activeHandle) return;
+
+      // Build the latest doc snapshot
       setDocuments(prevDocs => {
         const docIndex = prevDocs.findIndex(d => d.id === currentId);
         if (docIndex === -1) return prevDocs;
 
         const updatedDocs = [...prevDocs];
-        const activeDocInDB = updatedDocs[docIndex];
-        const existingFiles = activeDocInDB.files || {};
-        const newFiles = latestDataRef.current.files || {};
-        
-        // Safeguard to prevent overwriting elements with empty array during initialization/race condition
-        const hasExistingElements = activeDocInDB.elements && activeDocInDB.elements.length > 0;
+        const existing = updatedDocs[docIndex];
         const incomingElements = latestDataRef.current.elements;
         const isIncomingEmpty = !incomingElements || incomingElements.length === 0;
+        const hasExistingElements = existing.elements && existing.elements.length > 0;
 
-        let finalElements = activeDocInDB.elements;
-        let finalAppState = activeDocInDB.appState;
-        
-        if (!isIncomingEmpty || !hasExistingElements) {
-          finalElements = incomingElements;
-          finalAppState = latestDataRef.current.appState || activeDocInDB.appState;
-        } else {
-          console.warn("Emergency save prevented: would have overwritten elements with empty array.");
-        }
+        const finalElements = (!isIncomingEmpty || !hasExistingElements) ? incomingElements : existing.elements;
+        const finalAppState  = (!isIncomingEmpty || !hasExistingElements)
+          ? (latestDataRef.current.appState || existing.appState)
+          : existing.appState;
 
-        updatedDocs[docIndex] = {
-          ...updatedDocs[docIndex],
+        const docData = {
+          ...existing,
           elements: finalElements,
           appState: finalAppState,
-          files: { ...existingFiles, ...newFiles },
+          files: { ...existing.files, ...(latestDataRef.current.files || {}) },
           updatedAt: Date.now()
         };
+        updatedDocs[docIndex] = docData;
 
-        // Fire-and-forget IndexedDB write immediately (synchronous-as-possible)
-        setItem("shivadraw_docs", updatedDocs).catch(err => {
-          console.error("Emergency save to IndexedDB failed:", err);
-        });
-
-        // Save backup to localStorage
-        saveLocalStorageBackup(updatedDocs);
-        
-        // Trigger OPFS backup for visibilitychange emergencies (will likely abort on beforeunload)
-        setItemOPFS("shivadraw_docs_opfs", updatedDocs).catch(err => {
-          console.warn("Emergency save failed to write backup to OPFS:", err);
+        // Write to disk (fire-and-forget — best effort on unload)
+        writeToDiskHandle(activeHandle, docData).catch(err => {
+          console.error("Emergency disk save failed:", err);
         });
 
         return updatedDocs;
       });
     };
 
-    const handleBeforeUnload = () => {
-      emergencySave();
-    };
+    const handleBeforeUnload = () => { emergencySave(); };
 
     const handleVisibilityChange = () => {
-      // Save when user hides the tab (Alt+Tab, power loss, etc.)
-      if (document.visibilityState === "hidden") {
-        emergencySave();
-      }
+      if (document.visibilityState === "hidden") emergencySave();
     };
 
     window.addEventListener("beforeunload", handleBeforeUnload);
@@ -3142,102 +2903,155 @@ export default function App() {
             />
           </div>
 
-          {/* ── Auto-Save to Disk ───────────────────── */}
+          {/* ── Disk Save Status (always on) ───────────── */}
           <div style={{ borderTop: "1px solid var(--border-color)", marginTop: "calc(0.5rem * var(--ui-scale))", paddingTop: "calc(0.6rem * var(--ui-scale))" }}>
-            <div className="settings-row">
-              <div style={{ display: "flex", flexDirection: "column", gap: "calc(0.1rem * var(--ui-scale))" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "calc(0.3rem * var(--ui-scale))" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))", fontWeight: "600" }}>
-                  💾 Auto-save to Disk
+                  💾 Disk Auto-Save
                 </span>
-                {autoSaveFileName && (
-                  <span style={{
-                    fontSize: "calc(0.65rem * var(--ui-scale))",
-                    color: filePermissionState !== "granted" ? "#f59e0b" : autoSaveDiskStatus === "error" ? "#ef4444" : autoSaveDiskStatus === "saving" ? "#f59e0b" : "#10b981",
-                    maxWidth: "calc(130px * var(--ui-scale))",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap"
-                  }} title={autoSaveFileName}>
-                    {filePermissionState !== "granted" ? "⚠️ Needs Permission" : autoSaveDiskStatus === "saving" ? "⏳ Saving..." : autoSaveDiskStatus === "saved" ? "✅ Saved!" : autoSaveDiskStatus === "error" ? "❌ Failed" : `→ ${autoSaveFileName}`}
+                <span style={{
+                  fontSize: "calc(0.65rem * var(--ui-scale))",
+                  color: !fileHandlesRef.current[activeDocId]
+                    ? "#94a3b8"
+                    : filePermissionState !== "granted" ? "#f59e0b"
+                    : autoSaveDiskStatus === "error" ? "#ef4444"
+                    : autoSaveDiskStatus === "saving" ? "#f59e0b"
+                    : "#10b981",
+                  fontWeight: "600"
+                }}>
+                  {!fileHandlesRef.current[activeDocId]
+                    ? "No file"
+                    : filePermissionState !== "granted" ? "⚠️ Needs auth"
+                    : autoSaveDiskStatus === "saving" ? "⏳ Saving..."
+                    : autoSaveDiskStatus === "saved" ? "✅ Saved!"
+                    : autoSaveDiskStatus === "error" ? "❌ Failed"
+                    : "● Active"}
+                </span>
+              </div>
+
+              {/* Show linked file name */}
+              {autoSaveFileName && (
+                <span style={{
+                  fontSize: "calc(0.62rem * var(--ui-scale))",
+                  color: "var(--text-muted)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap"
+                }} title={autoSaveFileName}>
+                  📄 {autoSaveFileName}
+                </span>
+              )}
+
+              {/* Permission lost — show reconnect */}
+              {fileHandlesRef.current[activeDocId] && filePermissionState !== "granted" && (
+                <div style={{
+                  marginTop: "calc(0.2rem * var(--ui-scale))",
+                  padding: "calc(0.4rem * var(--ui-scale))",
+                  borderRadius: "calc(4px * var(--ui-scale))",
+                  background: "rgba(245, 158, 11, 0.1)",
+                  border: "1px solid rgba(245, 158, 11, 0.3)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "calc(0.3rem * var(--ui-scale))"
+                }}>
+                  <span style={{ fontSize: "calc(0.65rem * var(--ui-scale))", color: "#f59e0b", lineHeight: 1.2 }}>
+                    ⚠️ Re-authorize to resume auto-save
                   </span>
-                )}
-              </div>
-              <input
-                type="checkbox"
-                checked={autoSaveEnabled}
-                onChange={(e) => handleToggleAutoSave(e.target.checked)}
-                style={{
-                  cursor: "pointer",
-                  accentColor: "#10b981",
-                  width: "calc(16px * var(--ui-scale))",
-                  height: "calc(16px * var(--ui-scale))",
-                  flexShrink: 0
-                }}
-              />
-            </div>
-            {autoSaveFileName && filePermissionState !== "granted" && (
-              <div style={{ 
-                marginTop: "calc(0.35rem * var(--ui-scale))",
-                padding: "calc(0.4rem * var(--ui-scale))",
-                borderRadius: "calc(4px * var(--ui-scale))",
-                background: "rgba(245, 158, 11, 0.1)",
-                border: "1px solid rgba(245, 158, 11, 0.3)",
-                display: "flex",
-                flexDirection: "column",
-                gap: "calc(0.3rem * var(--ui-scale))"
-              }}>
-                <span style={{ fontSize: "calc(0.65rem * var(--ui-scale))", color: "#f59e0b", lineHeight: 1.2 }}>
-                  ⚠️ File connection paused. Authorize to resume auto-save.
-                </span>
-                <button
-                  className="btn-secondary"
-                  onClick={() => {
-                    const activeDoc = documents.find(d => d.id === activeDocId);
-                    const handle = fileHandlesRef.current[activeDocId] || activeDoc?.fileHandle;
-                    if (handle) {
-                      requestFilePermission(handle);
-                    }
-                  }}
-                  style={{ 
-                    fontSize: "calc(0.7rem * var(--ui-scale))",
-                    padding: "calc(0.25rem * var(--ui-scale)) calc(0.35rem * var(--ui-scale))",
-                    color: "#f59e0b",
-                    borderColor: "#f59e0b",
-                    background: "transparent",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: "calc(0.2rem * var(--ui-scale))"
-                  }}
-                >
-                  🔗 Reconnect File
-                </button>
-              </div>
-            )}
-            {autoSaveEnabled && filePermissionState === "granted" && (
-              <div style={{ display: "flex", gap: "calc(0.3rem * var(--ui-scale))", marginTop: "calc(0.35rem * var(--ui-scale))" }}>
+                  <button
+                    className="btn-secondary"
+                    onClick={async () => {
+                      const handle = fileHandlesRef.current[activeDocId];
+                      if (handle) {
+                        try {
+                          const status = await handle.requestPermission({ mode: "readwrite" });
+                          setFilePermissionState(status);
+                          if (status === "granted") {
+                            showToast("File access restored! ✅");
+                            // Re-read from disk in case file changed
+                            const parsed = await readFromDiskHandle(handle);
+                            if (parsed && Array.isArray(parsed.elements) && excalidrawAPI) {
+                              excalidrawAPI.updateScene({ elements: parsed.elements });
+                              setDocuments(prev => prev.map(d => d.id === activeDocId
+                                ? { ...d, elements: parsed.elements, files: parsed.files || {}, appState: parsed.appState || {} }
+                                : d));
+                            }
+                          } else {
+                            showToast("Permission denied", "error");
+                          }
+                        } catch (err) {
+                          showToast("Could not request permission", "error");
+                        }
+                      }
+                    }}
+                    style={{
+                      fontSize: "calc(0.7rem * var(--ui-scale))",
+                      padding: "calc(0.25rem * var(--ui-scale)) calc(0.35rem * var(--ui-scale))",
+                      color: "#f59e0b",
+                      borderColor: "#f59e0b",
+                      background: "transparent",
+                      cursor: "pointer"
+                    }}
+                  >
+                    🔗 Reconnect File
+                  </button>
+                </div>
+              )}
+
+              {/* No disk file yet — show Link to Disk */}
+              {!fileHandlesRef.current[activeDocId] && (
                 <button
                   className="btn-secondary"
                   onClick={saveNowToDisk}
-                  title="Save to disk right now"
-                  style={{ flex: 1, fontSize: "calc(0.72rem * var(--ui-scale))", padding: "calc(0.3rem * var(--ui-scale)) calc(0.4rem * var(--ui-scale))" }}
+                  title="Pick a disk location to save this board"
+                  style={{ fontSize: "calc(0.72rem * var(--ui-scale))", padding: "calc(0.3rem * var(--ui-scale)) calc(0.4rem * var(--ui-scale))" }}
                 >
-                  💾 Save Now
+                  📂 Link to Disk File
                 </button>
-                <button
-                  className="btn-secondary"
-                  onClick={async () => {
-                    const activeDoc = documents.find(d => d.id === activeDocId);
-                    await pickSaveFile(activeDoc?.title || "drawing");
-                  }}
-                  title="Change the save file location"
-                  style={{ flex: 1, fontSize: "calc(0.72rem * var(--ui-scale))", padding: "calc(0.3rem * var(--ui-scale)) calc(0.4rem * var(--ui-scale))" }}
-                >
-                  📁 Change File
-                </button>
-              </div>
-            )}
+              )}
+
+              {/* Has disk file + permission — show Save Now + Change File */}
+              {fileHandlesRef.current[activeDocId] && filePermissionState === "granted" && (
+                <div style={{ display: "flex", gap: "calc(0.3rem * var(--ui-scale))" }}>
+                  <button
+                    className="btn-secondary"
+                    onClick={saveNowToDisk}
+                    title="Save to disk right now"
+                    style={{ flex: 1, fontSize: "calc(0.72rem * var(--ui-scale))", padding: "calc(0.3rem * var(--ui-scale)) calc(0.4rem * var(--ui-scale))" }}
+                  >
+                    💾 Save Now
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    onClick={async () => {
+                      const activeDoc = documents.find(d => d.id === activeDocId);
+                      if (!window.showSaveFilePicker) return;
+                      try {
+                        const now = new Date();
+                        const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+                        const cleanTitle = (activeDoc?.title || "drawing").replace(/[\uD800-\uDFFF]./g, "").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_");
+                        const handle = await window.showSaveFilePicker({
+                          suggestedName: `${cleanTitle}-${dateStr}.shiva`,
+                          types: [{ description: "Shiva Canvas File", accept: { "application/json": [".shiva"] } }]
+                        });
+                        fileHandlesRef.current[activeDocId] = handle;
+                        await writeToDiskHandle(handle, activeDoc);
+                        await storeFileHandle(activeDocId, handle, activeDoc?.title, activeDoc?.backgroundStyle);
+                        setAutoSaveFileName(handle.name);
+                        setFilePermissionState("granted");
+                        showToast(`Moved to → ${handle.name} 💾`);
+                      } catch (err) {
+                        if (err.name !== "AbortError") showToast("Could not change file location", "error");
+                      }
+                    }}
+                    title="Change the save file location"
+                    style={{ flex: 1, fontSize: "calc(0.72rem * var(--ui-scale))", padding: "calc(0.3rem * var(--ui-scale)) calc(0.4rem * var(--ui-scale))" }}
+                  >
+                    📁 Change File
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

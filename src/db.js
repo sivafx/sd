@@ -1,35 +1,38 @@
-const DB_NAME = "shivadraw_db";
-const STORE_NAME = "documents_store";
-const DB_VERSION = 1;
+/**
+ * db.js — File Handle Registry (disk-first storage)
+ *
+ * Canvas data is stored ONLY in .shiva files on the user's hard disk.
+ * This module stores ONLY the FileSystemFileHandle objects (plus a small
+ * metadata record: docId + title) so the app can re-open the same files
+ * on the next browser session and re-request permission automatically.
+ *
+ * localStorage is still used for tiny UI prefs (theme, scale, active doc id).
+ */
 
-let dbPromise = null;
+// ─── File Handle Registry ──────────────────────────────────────────────────
+const REGISTRY_DB_NAME = "shivadraw_fileregistry";
+const REGISTRY_STORE   = "file_handles";
+const REGISTRY_VERSION = 1;
 
-function getDB() {
-  if (dbPromise) return dbPromise;
+let _registryDbPromise = null;
 
-  dbPromise = new Promise((resolve, reject) => {
+function getRegistryDB() {
+  if (_registryDbPromise) return _registryDbPromise;
+
+  _registryDbPromise = new Promise((resolve, reject) => {
     let timeoutId = setTimeout(() => {
       timeoutId = null;
-      dbPromise = null;
-      reject(new Error("IndexedDB connection timeout (1500ms)"));
-    }, 1500);
+      _registryDbPromise = null;
+      reject(new Error("FileHandle registry DB timeout"));
+    }, 2000);
 
     try {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-      request.onblocked = () => {
-        console.warn("IndexedDB open blocked by another connection.");
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-          dbPromise = null;
-          reject(new Error("IndexedDB blocked"));
-        }
-      };
+      const request = indexedDB.open(REGISTRY_DB_NAME, REGISTRY_VERSION);
 
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
-        if (!db.objectStoreNames.contains(STORE_NAME)) {
-          db.createObjectStore(STORE_NAME);
+        if (!db.objectStoreNames.contains(REGISTRY_STORE)) {
+          db.createObjectStore(REGISTRY_STORE, { keyPath: "docId" });
         }
       };
 
@@ -38,175 +41,151 @@ function getDB() {
           clearTimeout(timeoutId);
           resolve(event.target.result);
         } else {
-          // If connection opened after timeout, close it to avoid leaking/blocking
-          try {
-            event.target.result.close();
-          } catch (e) {}
+          try { event.target.result.close(); } catch (e) {}
         }
       };
 
       request.onerror = (event) => {
         const error = event.target.error;
-        console.error("IndexedDB open error:", error);
-        if (error && error.name === "CorruptError") {
-          console.warn("IndexedDB database is corrupted. Attempting to delete database to recover...");
-          try {
-            indexedDB.deleteDatabase(DB_NAME);
-          } catch (e) {
-            console.error("Failed to delete corrupted IndexedDB:", e);
-          }
-        }
+        console.error("FileHandle registry DB open error:", error);
         if (timeoutId) {
           clearTimeout(timeoutId);
-          dbPromise = null;
-          reject(error || new Error("IndexedDB open error"));
+          _registryDbPromise = null;
+          reject(error || new Error("Registry DB open error"));
+        }
+      };
+
+      request.onblocked = () => {
+        console.warn("FileHandle registry DB open blocked");
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          _registryDbPromise = null;
+          reject(new Error("Registry DB blocked"));
         }
       };
     } catch (err) {
       if (timeoutId) {
         clearTimeout(timeoutId);
-        dbPromise = null;
+        _registryDbPromise = null;
         reject(err);
       }
     }
   });
 
-  return dbPromise;
+  return _registryDbPromise;
 }
 
 /**
- * Retrieves an item from IndexedDB.
- * Falls back to localStorage if IndexedDB fails or is unavailable.
+ * Store a FileSystemFileHandle for a document.
+ * @param {string} docId
+ * @param {FileSystemFileHandle} handle
+ * @param {string} title
+ * @param {string} [backgroundStyle]
  */
-export async function getItem(key) {
+export async function storeFileHandle(docId, handle, title, backgroundStyle) {
   try {
-    const db = await getDB();
+    const db = await getRegistryDB();
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, "readonly");
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.get(key);
-
-      request.onsuccess = () => {
-        resolve(request.result !== undefined ? request.result : null);
-      };
-
-      request.onerror = () => {
-        reject(request.error);
-      };
+      const tx = db.transaction(REGISTRY_STORE, 'readwrite');
+      const store = tx.objectStore(REGISTRY_STORE);
+      const request = store.put({
+        docId,
+        handle,
+        title: title || 'Untitled',
+        backgroundStyle: backgroundStyle || 'pure-white',
+        updatedAt: Date.now()
+      });
+      request.onsuccess = () => resolve();
+      request.onerror  = () => reject(request.error);
     });
-  } catch (error) {
-    console.error("IndexedDB getItem error, falling back to localStorage:", error);
-    try {
-      const val = localStorage.getItem(key);
-      return val ? JSON.parse(val) : null;
-    } catch (e) {
-      return null;
-    }
+  } catch (err) {
+    console.error('storeFileHandle error:', err);
   }
 }
 
 /**
- * Checks if IndexedDB is supported and accessible in the current browser context.
+ * Retrieve all stored file handles.
+ * @returns {Promise<Array<{docId, handle, title, backgroundStyle, updatedAt}>>}
  */
-export async function isIndexedDBSupported() {
+export async function getAllFileHandles() {
   try {
-    const db = await getDB();
-    return !!db;
-  } catch (e) {
-    return false;
-  }
-}
-
-/**
- * Stores an item in IndexedDB.
- * Falls back to localStorage if IndexedDB fails or is unavailable.
- */
-export async function setItem(key, value) {
-  try {
-    const db = await getDB();
+    const db = await getRegistryDB();
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, "readwrite");
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.put(value, key);
-
-      request.onsuccess = () => {
-        resolve();
-      };
-
-      request.onerror = () => {
-        reject(request.error);
-      };
+      const tx = db.transaction(REGISTRY_STORE, 'readonly');
+      const store = tx.objectStore(REGISTRY_STORE);
+      const request = store.getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror  = () => reject(request.error);
     });
-  } catch (error) {
-    console.error("IndexedDB setItem error, falling back to localStorage:", error);
-    try {
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch (e) {
-      console.error("LocalStorage fallback setItem error:", e);
-      throw e;
-    }
+  } catch (err) {
+    console.error('getAllFileHandles error:', err);
+    return [];
   }
 }
 
 /**
- * Removes an item from IndexedDB.
- * Falls back to localStorage if IndexedDB fails or is unavailable.
+ * Remove a file handle from the registry (e.g. when a board is deleted).
+ * @param {string} docId
  */
-export async function removeItem(key) {
+export async function removeFileHandle(docId) {
   try {
-    const db = await getDB();
+    const db = await getRegistryDB();
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE_NAME, "readwrite");
-      const store = transaction.objectStore(STORE_NAME);
-      const request = store.delete(key);
-
-      request.onsuccess = () => {
-        resolve();
-      };
-
-      request.onerror = () => {
-        reject(request.error);
-      };
+      const tx = db.transaction(REGISTRY_STORE, 'readwrite');
+      const store = tx.objectStore(REGISTRY_STORE);
+      const request = store.delete(docId);
+      request.onsuccess = () => resolve();
+      request.onerror  = () => reject(request.error);
     });
-  } catch (error) {
-    console.error("IndexedDB removeItem error, falling back to localStorage:", error);
-    try {
-      localStorage.removeItem(key);
-    } catch (e) {}
+  } catch (err) {
+    console.error('removeFileHandle error:', err);
   }
 }
 
 /**
- * Stores an item in the Origin Private File System (OPFS).
- * OPFS allows storing unlimited data directly to the user's hard drive without permission dialogs.
+ * Update the title stored in the registry entry.
  */
-export async function setItemOPFS(key, value) {
+export async function updateHandleTitle(docId, title) {
   try {
-    if (!navigator.storage || !navigator.storage.getDirectory) return;
-    const dir = await navigator.storage.getDirectory();
-    // Using a .json extension for clarity, but the key is fine
-    const fileHandle = await dir.getFileHandle(`${key}.json`, { create: true });
-    const writable = await fileHandle.createWritable();
-    await writable.write(JSON.stringify(value));
-    await writable.close();
-  } catch (error) {
-    console.warn(`OPFS setItemOPFS error for key ${key}:`, error);
+    const db = await getRegistryDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(REGISTRY_STORE, 'readwrite');
+      const store = tx.objectStore(REGISTRY_STORE);
+      const getReq = store.get(docId);
+      getReq.onsuccess = () => {
+        const existing = getReq.result;
+        if (!existing) { resolve(); return; }
+        const putReq = store.put({ ...existing, title, updatedAt: Date.now() });
+        putReq.onsuccess = () => resolve();
+        putReq.onerror   = () => reject(putReq.error);
+      };
+      getReq.onerror = () => reject(getReq.error);
+    });
+  } catch (err) {
+    console.error('updateHandleTitle error:', err);
   }
 }
 
 /**
- * Retrieves an item from the Origin Private File System (OPFS).
+ * Update the backgroundStyle stored in the registry entry.
  */
-export async function getItemOPFS(key) {
+export async function updateHandleBackground(docId, backgroundStyle) {
   try {
-    if (!navigator.storage || !navigator.storage.getDirectory) return null;
-    const dir = await navigator.storage.getDirectory();
-    const fileHandle = await dir.getFileHandle(`${key}.json`);
-    const file = await fileHandle.getFile();
-    const text = await file.text();
-    return JSON.parse(text);
-  } catch (error) {
-    // Usually means the file doesn't exist yet, which is normal
-    return null;
+    const db = await getRegistryDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(REGISTRY_STORE, 'readwrite');
+      const store = tx.objectStore(REGISTRY_STORE);
+      const getReq = store.get(docId);
+      getReq.onsuccess = () => {
+        const existing = getReq.result;
+        if (!existing) { resolve(); return; }
+        const putReq = store.put({ ...existing, backgroundStyle, updatedAt: Date.now() });
+        putReq.onsuccess = () => resolve();
+        putReq.onerror   = () => reject(putReq.error);
+      };
+      getReq.onerror = () => reject(getReq.error);
+    });
+  } catch (err) {
+    console.error('updateHandleBackground error:', err);
   }
 }
