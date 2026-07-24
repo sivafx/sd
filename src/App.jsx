@@ -363,6 +363,17 @@ export default function App() {
   // docs without capturing them in a stale closure or needing them as effect deps.
   const latestDocumentsRef = useRef([]);
   const [activeDropdown, setActiveDropdown] = useState(null);
+  const [collapsedSections, setCollapsedSections] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('shivadraw_collapsed_sections') || '{}'); }
+    catch { return {}; }
+  });
+  const toggleSection = useCallback((name) => {
+    setCollapsedSections(prev => {
+      const next = { ...prev, [name]: !prev[name] };
+      localStorage.setItem('shivadraw_collapsed_sections', JSON.stringify(next));
+      return next;
+    });
+  }, []);
   const [brushSmoothing, setBrushSmoothing] = useState(() => {
     return parseInt(localStorage.getItem("shivadraw_brush_smoothing") || "3", 10);
   });
@@ -2755,8 +2766,11 @@ export default function App() {
 
         {/* Settings / Preferences Section */}
         <div className="settings-section" style={{ borderBottom: "1px solid var(--border-color)", paddingBottom: "calc(1.25rem * var(--ui-scale))", marginBottom: "calc(1.25rem * var(--ui-scale))" }}>
-          <h4 className="section-title">Settings</h4>
-          
+          <button className="section-header-btn" onClick={() => toggleSection('settings')}>
+            <h4 className="section-title">⚙️ Settings</h4>
+            <span className={`section-chevron${!collapsedSections.settings ? ' open' : ''}`}>▶</span>
+          </button>
+          <div className={`section-body${collapsedSections.settings ? ' collapsed' : ''}`}>
 
           
           {/* Brush Smoothing Slider */}
@@ -2892,53 +2906,32 @@ export default function App() {
             </button>
           </div>
 
-          <div className="settings-row properties-panel-row" style={{ marginTop: "calc(0.5rem * var(--ui-scale))" }}>
+          <div className="settings-row" style={{ marginTop: "calc(0.5rem * var(--ui-scale))" }}>
             <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))" }}>Show Properties Panel</span>
-            <input 
-              type="checkbox" 
-              checked={propertiesPanelVisible} 
-              onChange={(e) => setPropertiesPanelVisible(e.target.checked)} 
-              style={{
-                cursor: "pointer",
-                accentColor: "#6366f1",
-                width: "calc(16px * var(--ui-scale))",
-                height: "calc(16px * var(--ui-scale))"
-              }}
-            />
+            <label className="toggle-switch">
+              <input type="checkbox" checked={propertiesPanelVisible} onChange={(e) => setPropertiesPanelVisible(e.target.checked)} />
+              <span className="toggle-track"><span className="toggle-thumb" /></span>
+            </label>
           </div>
 
           <div className="settings-row" style={{ marginTop: "calc(0.5rem * var(--ui-scale))" }}>
             <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))" }}>Show Canvas Controls</span>
-            <input 
-              type="checkbox" 
-              checked={showCanvasControls} 
-              onChange={handleToggleCanvasControls} 
-              style={{
-                cursor: "pointer",
-                accentColor: "#6366f1",
-                width: "calc(16px * var(--ui-scale))",
-                height: "calc(16px * var(--ui-scale))"
-              }}
-            />
+            <label className="toggle-switch">
+              <input type="checkbox" checked={showCanvasControls} onChange={handleToggleCanvasControls} />
+              <span className="toggle-track"><span className="toggle-thumb" /></span>
+            </label>
           </div>
 
           <div className="settings-row" style={{ marginTop: "calc(0.5rem * var(--ui-scale))" }}>
             <span style={{ fontSize: "calc(0.75rem * var(--ui-scale))" }}>Show Toast Notifications</span>
-            <input 
-              type="checkbox" 
-              checked={showNotifications} 
-              onChange={(e) => {
+            <label className="toggle-switch">
+              <input type="checkbox" checked={showNotifications} onChange={(e) => {
                 const val = e.target.checked;
                 setShowNotifications(val);
                 localStorage.setItem("shivadraw_show_notifications", val);
-              }}
-              style={{
-                cursor: "pointer",
-                accentColor: "#6366f1",
-                width: "calc(16px * var(--ui-scale))",
-                height: "calc(16px * var(--ui-scale))"
-              }}
-            />
+              }} />
+              <span className="toggle-track"><span className="toggle-thumb" /></span>
+            </label>
           </div>
 
           {/* ── Disk Save Status (always on) ───────────── */}
@@ -3091,17 +3084,19 @@ export default function App() {
               )}
             </div>
           </div>
+          </div>{/* /section-body settings */}
         </div>
 
         {/* Drawings Selector */}
         <div className="documents-section">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "calc(0.5rem * var(--ui-scale))" }}>
-            <h4 className="section-title" style={{ margin: 0 }}>My Drawings</h4>
-            <span style={{ fontSize: "calc(0.7rem * var(--ui-scale))", color: saveStatus === "saving" ? "var(--accent-color)" : "var(--success-color)", display: "flex", alignItems: "center", gap: "calc(0.25rem * var(--ui-scale))", userSelect: "none" }}>
-              <span className={`status-dot ${saveStatus}`} style={{ width: "calc(6px * var(--ui-scale))", height: "calc(6px * var(--ui-scale))", borderRadius: "50%", background: saveStatus === "saving" ? "var(--accent-color)" : "var(--success-color)", display: "inline-block" }}></span>
-              {saveStatus === "saving" ? "Saving..." : "Saved"}
-            </span>
-          </div>
+          <button className="section-header-btn" onClick={() => toggleSection('drawings')}>
+            <div style={{ display: "flex", alignItems: "center", gap: "calc(0.4rem * var(--ui-scale))" }}>
+              <h4 className="section-title" style={{ margin: 0 }}>📄 My Drawings</h4>
+              <span className={`status-dot ${saveStatus}`} style={{ width: "calc(6px * var(--ui-scale))", height: "calc(6px * var(--ui-scale))", borderRadius: "50%", background: saveStatus === "saving" ? "var(--accent-color)" : "var(--success-color)", display: "inline-block", flexShrink: 0 }}></span>
+            </div>
+            <span className={`section-chevron${!collapsedSections.drawings ? ' open' : ''}`}>▶</span>
+          </button>
+          <div className={`section-body${collapsedSections.drawings ? ' collapsed' : ''}`}>
           <input
             type="text"
             placeholder="🔍 Search drawings..."
@@ -3151,6 +3146,14 @@ export default function App() {
                     </div>
                     <span className="doc-meta">{formatTime(doc.updatedAt)}</span>
                   </div>
+                  {fileHandlesRef.current[doc.id] && (
+                    <span
+                      className={`doc-disk-badge${doc.id === activeDocId && filePermissionState !== "granted" ? " warn" : ""}`}
+                      title={doc.id === activeDocId && filePermissionState !== "granted" ? "Needs re-authorization" : "Linked to disk"}
+                    >
+                      {doc.id === activeDocId && filePermissionState !== "granted" ? "⚠" : "🔗"}
+                    </span>
+                  )}
 
                   <div className="doc-actions" onClick={(e) => e.stopPropagation()}>
                     <button className="doc-btn edit" onClick={() => setEditingDocId(doc.id)} title="Rename">✏️</button>
@@ -3160,11 +3163,16 @@ export default function App() {
                 </li>
               ))}
           </ul>
+          </div>{/* /section-body drawings */}
         </div>
 
         {/* Templates Selector */}
         <div className="templates-section">
-          <h4 className="section-title">Templates</h4>
+          <button className="section-header-btn" onClick={() => toggleSection('templates')}>
+            <h4 className="section-title">🎨 Templates</h4>
+            <span className={`section-chevron${!collapsedSections.templates ? ' open' : ''}`}>▶</span>
+          </button>
+          <div className={`section-body${collapsedSections.templates ? ' collapsed' : ''}`}>
           <div className="templates-grid">
             <div className="template-card" onClick={() => createNewBoard("Flowchart Diagram", FLOWCHART_ELEMENTS)}>
               <span className="template-icon">🌿</span>
@@ -3183,13 +3191,18 @@ export default function App() {
               <span className="template-name">Blank Page</span>
             </div>
           </div>
+          </div>{/* /section-body templates */}
         </div>
 
 
 
         {/* Controls / Settings */}
         <div className="settings-section">
-          <h4 className="section-title">Controls</h4>
+          <button className="section-header-btn" onClick={() => toggleSection('controls')}>
+            <h4 className="section-title">🛠️ Controls</h4>
+            <span className={`section-chevron${!collapsedSections.controls ? ' open' : ''}`}>▶</span>
+          </button>
+          <div className={`section-body${collapsedSections.controls ? ' collapsed' : ''}`}>
           <button className="btn-secondary" onClick={exportBoard} title="Export board as Shiva Canvas .shiva file">
             <span>📤</span> Export .shiva
           </button>
@@ -3222,6 +3235,7 @@ export default function App() {
               <span>📂</span> Restore from Backup
             </button>
           </div>
+          </div>{/* /section-body controls */}
         </div>
 
 
@@ -3252,6 +3266,15 @@ export default function App() {
 
 
         <div style={{ width: "100%", height: "100%", position: "relative" }}>
+          {!sidebarOpen && (
+            <button
+              className="sidebar-reopen-btn"
+              onClick={() => setSidebarOpen(true)}
+              title="Open Sidebar (Ctrl + \\)"
+            >
+              ▶
+            </button>
+          )}
           {/* Top Banner Prompt: Not saved to disk yet */}
           {!loading && !fileHandlesRef.current[activeDocId] && (
             <div 

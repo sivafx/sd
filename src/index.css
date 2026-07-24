@@ -1237,9 +1237,114 @@ body.hide-toasts .excalidraw-container [class*="Toast" i],
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Responsive adjustments: hide element properties settings checkbox in mobile view */
-@media (max-width: 768px) {
-  .settings-row.properties-panel-row {
-    display: none !important;
-  }
+/* ─── Collapsible Section Headers ────────────────────────────────────────── */
+.section-header-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: calc(0.1rem * var(--ui-scale)) 0;
+  cursor: pointer;
+  margin-bottom: calc(0.5rem * var(--ui-scale));
+  color: inherit;
+  text-align: left;
+}
+.section-header-btn:hover .section-title {
+  color: var(--primary-color);
+}
+.section-chevron {
+  font-size: calc(0.6rem * var(--ui-scale));
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+.section-chevron.open {
+  transform: rotate(90deg);
+}
+.section-body.collapsed {
+  display: none;
+}
+
+/* ─── Styled Pill Toggle Switch ──────────────────────────────────────────── */
+.toggle-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.toggle-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.toggle-track {
+  width: calc(28px * var(--ui-scale));
+  height: calc(16px * var(--ui-scale));
+  background: var(--border-color);
+  border-radius: 999px;
+  transition: background 0.2s ease;
+  position: relative;
+  flex-shrink: 0;
+}
+.toggle-switch input:checked ~ .toggle-track {
+  background: var(--primary-color);
+}
+.toggle-thumb {
+  position: absolute;
+  top: calc(2px * var(--ui-scale));
+  left: calc(2px * var(--ui-scale));
+  width: calc(12px * var(--ui-scale));
+  height: calc(12px * var(--ui-scale));
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.toggle-switch input:checked ~ .toggle-track .toggle-thumb {
+  transform: translateX(calc(12px * var(--ui-scale)));
+}
+
+/* ─── Floating Sidebar Reopen Tab ────────────────────────────────────────── */
+.sidebar-reopen-btn {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  z-index: 20;
+  width: calc(18px * var(--ui-scale));
+  height: calc(56px * var(--ui-scale));
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-left: none;
+  border-radius: 0 calc(8px * var(--ui-scale)) calc(8px * var(--ui-scale)) 0;
+  color: var(--text-muted);
+  font-size: calc(0.55rem * var(--ui-scale));
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-md);
+  transition: var(--transition-smooth);
+}
+.sidebar-reopen-btn:hover {
+  background: var(--primary-light);
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+  width: calc(26px * var(--ui-scale));
+}
+
+/* ─── Per-doc Disk Status Badge ──────────────────────────────────────────── */
+.doc-disk-badge {
+  font-size: calc(0.65rem * var(--ui-scale));
+  flex-shrink: 0;
+  opacity: 0.75;
+  line-height: 1;
+}
+.doc-disk-badge.warn {
+  animation: pulse 1s infinite alternate;
 }
