@@ -1226,13 +1226,8 @@ export default function App() {
         return;
       }
 
-      // Intercept Ctrl+S (Save) or Cmd+S to write directly to the linked disk file or prompt once
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s" && !e.altKey) {
-        e.preventDefault();
-        e.stopPropagation();
-        saveNowToDisk();
-        return;
-      }
+      // Note: Ctrl+S is handled by the dedicated save useEffect below (includes re-auth logic).
+      // Do NOT handle it here to avoid double-save.
 
       // Intercept Ctrl+O (Open) or Cmd+O to open Shiva Canvas .shiva/.json file dialog
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "o") {
@@ -1699,11 +1694,8 @@ export default function App() {
         const activeHandle = fileHandlesRef.current[currentActiveId];
         if (activeHandle) {
           const docData = updatedDocs[docIndex];
-          
-          // Safety: skip save if canvas is completely empty (guards against crash race)
-          if (!docData.elements || docData.elements.length === 0) {
-            return updatedDocs;
-          }
+          // Note: we intentionally allow saving an empty canvas so that
+          // "Reset Canvas" is persisted to disk (no early-return here).
 
           if (autoSaveTimeoutRef.current) clearTimeout(autoSaveTimeoutRef.current);
           
@@ -3070,19 +3062,19 @@ export default function App() {
                   <button
                     className="btn-secondary"
                     onClick={async () => {
-                      const activeDoc = documents.find(d => d.id === activeDocId);
+                      const currentDoc = documents.find(d => d.id === activeDocId);
                       if (!window.showSaveFilePicker) return;
                       try {
                         const now = new Date();
                         const dateStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
-                        const cleanTitle = (activeDoc?.title || "drawing").replace(/[\uD800-\uDFFF]./g, "").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_");
+                        const cleanTitle = (currentDoc?.title || "drawing").replace(/[\uD800-\uDFFF]./g, "").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_");
                         const handle = await window.showSaveFilePicker({
                           suggestedName: `${cleanTitle}-${dateStr}.shiva`,
                           types: [{ description: "Shiva Canvas File", accept: { "application/json": [".shiva"] } }]
                         });
                         fileHandlesRef.current[activeDocId] = handle;
-                        await writeToDiskHandle(handle, activeDoc);
-                        await storeFileHandle(activeDocId, handle, activeDoc?.title, activeDoc?.backgroundStyle);
+                        await writeToDiskHandle(handle, currentDoc);
+                        await storeFileHandle(activeDocId, handle, currentDoc?.title, currentDoc?.backgroundStyle);
                         setAutoSaveFileName(handle.name);
                         setFilePermissionState("granted");
                         showToast(`Moved to → ${handle.name} 💾`);
